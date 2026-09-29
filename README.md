@@ -9,13 +9,18 @@
 
 | 入口 | 地址 | 托管 |
 |---|---|---|
-| **前端（发给别人就发这个）** | <https://fray-seven.vercel.app> | Vercel |
-| 前后端同一个域名 | <https://fray-api.lemonhall2012.workers.dev> | Cloudflare Workers |
-| 后端 API | <https://fray-api.lemonhall2012.workers.dev/v1/health> | Workers + Durable Objects + D1 |
+| **前端（发给别人就发这个）** | <https://fray.lemonhall.me> | Vercel |
+| 前后端同一个域名 | <https://fray-api.lemonhall.me> | Cloudflare Workers |
+| 后端 API | <https://fray-api.lemonhall.me/v1/health> | Workers + Durable Objects + D1 |
 
 打开就是房间浏览器：右上角输个昵称进站 → 建房或从列表里加入别人的房间 →
 房主投放机器人（免费计划即可）→ 开打。两个入口跑的是**同一份前端产物**，
 区别只是前端连的后端地址一个是绝对地址、一个是同源。
+
+> 后端为什么不直接用 `*.workers.dev`：那个域名在国内是**解析层就被污染**的，查得到、
+> 连不上。绑到自己 zone 下的子域（`wrangler.jsonc` 里的 `routes` + `custom_domain: true`）
+> 之后走的是同一套 anycast，国内直连可用。实测：不走代理
+> `curl https://fray-api.lemonhall.me/v1/health` 返回 200。
 
 ![房间浏览器](docs/shots/00-rooms-list.png)
 
@@ -124,7 +129,7 @@ npm run smoke                   # 纯服务端冒烟：HTTP + WebSocket 走完�
 **线上**还是本地，全看环境变量：
 
 ```powershell
-$env:SMOKE_BASE='https://fray-api.lemonhall2012.workers.dev'
+$env:SMOKE_BASE='https://fray-api.lemonhall.me'
 $env:HTTPS_PROXY='http://127.0.0.1:7897'; $env:NODE_USE_ENV_PROXY='1'   # 国内直连打不通时
 node tools\smoke.mjs
 ```
@@ -169,7 +174,7 @@ $env:FRAY_API='https://fray-api.<你的子域>.workers.dev'; node tools/build.mj
 上线之后注册线上租户（不带 `--local` 的那些 wrangler 命令操作的就是真实资源）：
 
 ```powershell
-curl.exe -X POST https://fray-api.<子域>.workers.dev/v1/tenants `
+curl.exe -X POST https://fray-api.lemonhall.me/v1/tenants `
   -H "authorization: Bearer $env:ADMIN_KEY" -H "content-type: application/json" `
   -d '{"id":"neon","displayName":"霓虹前线"}'
 ```
@@ -192,8 +197,8 @@ docs/       architecture.md（架构与时序）、protocol.md（线协议）、
 
 ## 现状
 
-**已上线**：后端 `fray-api.lemonhall2012.workers.dev`（免费计划，无 Worker Loader），
-前端 `fray-seven.vercel.app`；线上冒烟 15/15、线上双客户端 E2E 10/10 通过。
+**已上线**：后端 `fray-api.lemonhall.me`（免费计划，无 Worker Loader），
+前端 `fray.lemonhall.me`；线上冒烟 15/15、线上双客户端 E2E 10/10 通过。
 
 已经能玩：
 

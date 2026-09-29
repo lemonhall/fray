@@ -2,8 +2,8 @@
 
 这四张图不是本地开发环境的画面，而是**生产环境**的实拍：
 
-* 站点：<https://fray-seven.vercel.app>（Vercel 上的前端）
-* 后端：<https://fray-api.lemonhall2012.workers.dev>（Cloudflare Workers + Durable Objects）
+* 站点：<https://fray.lemonhall.me>（Vercel 上的前端；拍照那天还挂在 `fray-seven.vercel.app`）
+* 后端：<https://fray-api.lemonhall.me>（Cloudflare Workers + Durable Objects）
 * 时间：2026-09-29
 
 拍法：Playwright 驱动本机 Chrome（1440×900，`channel:"chrome"`）真的打开线上站点，

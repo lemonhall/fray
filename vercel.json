@@ -4,7 +4,7 @@
   "cleanUrls": true,
   "build": {
     "env": {
-      "FRAY_API": "https://fray-api.lemonhall2012.workers.dev"
+      "FRAY_API": "https://fray-api.lemonhall.me"
     }
   },
   "headers": [

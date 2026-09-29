@@ -5,7 +5,7 @@
  * 这里只验**服务端契约**（HTTP 路由 + 线协议），几秒钟跑完，适合每次部署后立刻自检。
  *
  *   node tools/smoke.mjs                                     # 默认打本机 127.0.0.1:8790
- *   $env:SMOKE_BASE='https://fray-api.<子域>.workers.dev'; node tools/smoke.mjs
+ *   $env:SMOKE_BASE='https://fray-api.lemonhall.me'; node tools/smoke.mjs
  *
  * 出口码：全过 0，有任何一条不过 1。
  */

@@ -2,6 +2,15 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "fray-api",
   "main": "src/index.mjs",
+
+  // 正式入口走自己的 zone，而不是 `*.workers.dev`：后者在国内是**解析层就被污染**的，
+  // 域名能查出来但连不上。`custom_domain: true` 意味着这条路由的 DNS 记录与证书
+  // 都由 wrangler/CF 托管（部署时自动建一条 proxied 的 CNAME，不用手工去 DNS 面板加）。
+  // 注意：这个域名同时也在提供前端——`web/` 是这个 Worker 的 assets 绑定，
+  // 所以 https://fray-api.lemonhall.me/ 打开就是游戏本体，前后端同源、不跨域。
+  "routes": [
+    { "pattern": "fray-api.lemonhall.me", "custom_domain": true }
+  ],
   // 这个日期是**本机 workerd 二进制支持的最新日期**（wrangler 4.100.0 → 2026-06-18）。
   // 写成比它还新的日期只会让本地 dev 起不来，线上并不需要那么新的语义。
   "compatibility_date": "2026-06-18",
