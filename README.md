@@ -5,6 +5,18 @@
 打开一个网址，看到一屋子房间；开一桌、或者加入别人的桌子；房主往场里投放机器人；
 开打之后，真人和机器人在同一张地图上互相淘汰。
 
+### 线上就绪（已部署，可直接点开玩）
+
+| 入口 | 地址 | 托管 |
+|---|---|---|
+| **前端（发给别人就发这个）** | <https://fray-seven.vercel.app> | Vercel |
+| 前后端同一个域名 | <https://fray-api.lemonhall2012.workers.dev> | Cloudflare Workers |
+| 后端 API | <https://fray-api.lemonhall2012.workers.dev/v1/health> | Workers + Durable Objects + D1 |
+
+打开就是房间浏览器：右上角输个昵称进站 → 建房或从列表里加入别人的房间 →
+房主投放机器人（免费计划即可）→ 开打。两个入口跑的是**同一份前端产物**，
+区别只是前端连的后端地址一个是绝对地址、一个是同源。
+
 ![房间浏览器](docs/shots/00-rooms-list.png)
 
 | 候场：名册 + 房主控制 | 竞技场：人机混战 |
@@ -84,6 +96,7 @@ curl.exe -X POST http://127.0.0.1:8790/v1/tenants -H "authorization: Bearer $env
 ```powershell
 npm test                        # 37 个单元测试：内核、名册、权限、线格式、路由、DOM 契约
 npm run e2e                     # 双客户端联调（需要本机 Chrome + Playwright）
+npm run smoke                   # 纯服务端冒烟：HTTP + WebSocket 走完一局，不需要浏览器
 ```
 
 `npm test` 里有几类值得单独说的断言：
@@ -103,6 +116,17 @@ npm run e2e                     # 双客户端联调（需要本机 Chrome + Pla
 > Playwright 需要装在仓库里（`npm i -D playwright`），或者全局装好后给它指路：
 > `$env:E2E_PLAYWRIGHT_DIR='E:\dev-state\npm-global\node_modules'; npm run e2e`
 
+`npm run smoke` 是部署后最省事的那道自检——15 条断言，几秒钟出结果。它打的是
+**线上**还是本地，全看环境变量：
+
+```powershell
+$env:SMOKE_BASE='https://fray-api.lemonhall2012.workers.dev'
+$env:HTTPS_PROXY='http://127.0.0.1:7897'; $env:NODE_USE_ENV_PROXY='1'   # 国内直连打不通时
+node tools\smoke.mjs
+```
+
+它是纯 Node（只用内置 `fetch` / `WebSocket`），所以 CI 里不需要 Chrome。
+
 ---
 
 ## 部署
@@ -120,9 +144,18 @@ npx wrangler secret put ADMIN_KEY               # 生产密钥：注册租户用
 前端（同一份 `web/` 产物，可以放到任何静态托管上）：
 
 ```powershell
-$env:FRAY_API='https://fray-api.<你的子域>.workers.dev'
-node tools/build.mjs                            # 把后端地址注入成构建期常量
-npx vercel deploy --prod                        # 或任意静态托管
+vercel link --yes --project fray                # 首次：把仓库绑到一个 Vercel 项目
+vercel --prod                                   # 之后每次部署都是一条命令
+```
+
+这里不需要手工设 `FRAY_API`：它写在 [`vercel.json`](vercel.json) 的 `build.env` 里，
+Vercel 云端跑 `npm run build` 时会自动注入，**GitHub 推一下就会重建生产环境**——
+所以这个仓库的推送即部署，前端不会和后端漂移。
+
+想手工出产物（比如发到别的静态托管）就照旧：
+
+```powershell
+$env:FRAY_API='https://fray-api.<你的子域>.workers.dev'; node tools/build.mjs
 ```
 
 `web/` 既是 Worker 的静态资源目录（同源部署时前端后端一个域名），也是 Vercel 的
@@ -145,7 +178,8 @@ curl.exe -X POST https://fray-api.<子域>.workers.dev/v1/tenants `
 sim/        共享内核（服务端与浏览器同一份）：地图 / 角色 / 战斗 / 子弹 / AI / 世界推进 / 线格式
 src/        Worker 与 Durable Object：路由 / 认证 / 租户 / Lobby / Room / 结算
 web/        静态站点：index.html + 原版皮肤 game.css + 联机层 net.css + js/ 各模块
-tools/      build（复制内核+注入地址）/ extract-original（一次性抽取原版皮肤）/ rebrand / e2e-local
+tools/      build（复制内核+注入地址）/ extract-original（一次性抽取原版皮肤）/ rebrand
+            smoke（纯服务端冒烟，无浏览器）/ e2e-local（双 Chrome 联调）
 tests/      node:test —— 内核、名册、权限、线格式、路由、DOM 契约
 docs/       architecture.md（架构与时序）、protocol.md（线协议）、shots/（截图）
 ```
@@ -153,6 +187,9 @@ docs/       architecture.md（架构与时序）、protocol.md（线协议）、
 ---
 
 ## 现状
+
+**已上线**：后端 `fray-api.lemonhall2012.workers.dev`（免费计划，无 Worker Loader），
+前端 `fray-seven.vercel.app`；线上冒烟 15/15、线上双客户端 E2E 10/10 通过。
 
 已经能玩：
 
