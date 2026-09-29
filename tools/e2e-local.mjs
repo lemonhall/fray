@@ -161,14 +161,20 @@ async function main() {
     steps.push(["开打后 2.5 秒内就有第一帧快照（不靠 alarm 兜底）", startMs < 2500, `${startMs}ms`]);
 
     // ---------------------------------------------------------------- 5. 混战名册
-    const roster = await until(async () => {
-      const { actors, self } = await observe(host);
-      return self && actors.length >= 2 ? { actors, self } : null;
-    }, { what: "快照里有多个单位" });
-    const humans = roster.actors.filter(a => a.k === 1).length;
-    const botsSeen = roster.actors.filter(a => a.k === 0).length;
-    steps.push(["我方能看见对面对手（可见性过滤之后的快照非空）",
-      humans >= 1 && botsSeen >= 1, `看得见 ${humans} 个真人 + ${botsSeen} 个机器人的实体`]);
+    // 可见性是按视角裁剪出来的，所以"某一瞬间看得见谁"取决于站位与草丛——
+    // 这里累计一段时间，断言的是"这段时间里两类实体都出现过"，而不是"第一帧就有"。
+    const seen = { humans: 0, bots: 0 };
+    await until(async () => {
+      const snap = await observe(host);
+      for (const a of snap.actors) {
+        if (a.ow === snap.meId) continue;
+        if (a.k === 1) seen.humans = 1;
+        else seen.bots = 1;
+      }
+      return seen.humans && seen.bots;
+    }, { what: "快照里同时出现过真人对手与机器人", timeout: 30000, every: 700 }).catch(() => null);
+    steps.push(["我方能看见对面对手与机器人（可见性过滤之后的快照）",
+      !!seen.humans && !!seen.bots, `看得见真人 ${seen.humans} 类 / 机器人 ${seen.bots} 类`]);
 
     // ---------------------------------------------------------------- 6. 移动：本地预测 + 服务端对账
     const before = (await observe(host)).self;

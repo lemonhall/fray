@@ -1,217 +1,38 @@
 /**
- * 编排层：屏幕切换、输入上行、对局表现循环。
+ * 编排层：主循环、输入上行、启动接线。
  *
  * 这里刻意不写任何规则。它只做三件事：
- *   1. 把一条 WebSocket 上的消息分发到各个模块（房间视图 → roomui，地图 → render，
- *      快照 → view/predict，事件 → fx，结算 → results）；
- *   2. 以固定 60Hz 跑**只预测我自己**的位移，并以 25Hz 把输入意图上行；
- *   3. 每帧把最新快照插值成画面，再把 HUD 同步到 DOM。
+ *   1. 以固定 60Hz 跑**只预测我自己**的位移，并以 25Hz 把输入意图发出去；
+ *   2. 每帧把最新快照插值成画面，再把 HUD 同步到 DOM；
+ *   3. 把界面上的按钮接到"发一条消息"上。
  *
- * 一条最容易被忽略但很重要的约定：`S.screen` 是**界面状态**，不是对局状态。
- * 对局状态永远在服务端（房间视图里的 `ph`）。界面可以比服务端慢半拍，
- * 但绝不能反过来——那就是"我这边显示赢了、别人那边还在打"的来源。
+ * 房间与对局的协议处理在 `session.mjs`，屏幕切换在 `screens.mjs`，
+ * 升级弹窗在 `upgrade.mjs`——这个文件只负责"把它们串起来，然后一直转下去"。
  */
 
 import { DT, clamp } from "/sim/constants.mjs";
-import { decodeMap } from "/sim/wire.mjs";
-import { perkById, heroOf } from "/sim/data.mjs";
-import { S, FX } from "./state.mjs";
+import { heroOf } from "/sim/data.mjs";
+import { S } from "./state.mjs";
 import { attachInput, bindStick, clearInputs, frameOf, moveVector, aimAngle } from "./input.mjs";
-import { pushSnapshot, buildView } from "./view.mjs";
-import { initPredict, stepPredict, reconcile, applyBoxUpdates } from "./predict.mjs";
-import { buildGround, renderGame } from "./render.mjs";
-import { seedFx, consumeEvents, stepFx } from "./fx.mjs";
-import { initAudio, toggleSound, play } from "./audio.mjs";
-import { openSocket, startPing } from "./net.mjs";
-import { initRooms, connect, startAutoRefresh, stopAutoRefresh, refresh } from "./rooms.mjs";
-import { bindRoom, renderRoom, roomIsHost } from "./roomui.mjs";
-import { updateHud, primeMatch, bindAbilityButtons, updatePerks } from "./hud.mjs";
-import { showResults, hideResults, bindResults } from "./results.mjs";
+import { buildView } from "./view.mjs";
+import { stepPredict } from "./predict.mjs";
+import { renderGame } from "./render.mjs";
+import { stepFx } from "./fx.mjs";
+import { initAudio, toggleSound } from "./audio.mjs";
+import { initRooms, connect } from "./rooms.mjs";
+import { bindRoom, roomIsHost } from "./roomui.mjs";
+import { updateHud, bindAbilityButtons } from "./hud.mjs";
+import { hideResults, bindResults } from "./results.mjs";
 import { initLoadout, resizeShowcase, renderShowcase, selectedHero, prefsOf } from "./showcase.mjs";
+import { joinRoom, leaveRoom, send } from "./session.mjs";
+import { setScreen, togglePause } from "./screens.mjs";
+import { bindUpgrade, choosePerk } from "./upgrade.mjs";
 
 const $ = id => document.getElementById(id);
 const SEND_MS = 40;              // 25Hz 上行：比广播窗口（50ms）密一点，快照才不会跳格子
 const ctx = () => $("game").getContext("2d");
 
-let link = null;
-let stopPing = null;
 const state = { last: 0, acc: 0, lastSent: 0, view: null };
-
-// ---------------------------------------------------------------- 屏幕切换
-
-function setScreen(screen) {
-  S.screen = screen;
-  $("rooms").classList.toggle("hidden", screen !== "rooms");
-  $("lobby").classList.toggle("hidden", screen !== "staging");
-  $("arena").classList.toggle("hidden", screen !== "play");
-  $("results").classList.toggle("hidden", screen !== "over");
-  document.body.classList.toggle("rooms-open", screen === "rooms");
-  stopAutoRefresh();
-  if (screen === "rooms") {
-    startAutoRefresh();
-    document.body.style.overflow = "";
-    $("app").style.minHeight = "";
-  }
-  if (screen === "staging") { document.body.style.overflow = ""; $("app").style.minHeight = ""; resizeShowcase(); }
-  if (screen === "play") {
-    document.body.style.overflow = "hidden";
-    $("app").style.minHeight = "0";
-    window.scrollTo(0, 0);
-    $("modalBackdrop").classList.add("hidden");
-    $("game").focus({ preventScroll: true });
-  }
-}
-
-function resetMatchState() {
-  S.snaps = []; S.map = null; S.ground = null; S.predictW = null; S.predictMe = null;
-  S.me = null; S.actorId = 0; S.meTeam = 0; S.results = null; S.shake = 0; S.hitUntil = 0;
-  FX.particles = []; FX.floaters = []; FX.rings = []; FX.beams = []; FX.feed = []; FX.announce = null;
-  hideUpgrade();
-  $("upgradeOverlay").classList.add("hidden");
-  $("respawnOverlay").classList.add("hidden");
-}
-
-// ---------------------------------------------------------------- 连接
-
-async function joinRoom(roomId) {
-  leaveRoom(false);
-  if (!S.token) await connect();
-  resetMatchState();
-  link = openSocket(roomId, { onMessage: onServerMessage, onClose: onSocketClose, onError: () => {} });
-  stopPing = startPing(link);
-  $("roomTitle").textContent = "正在进入房间…";
-  setScreen("staging");
-}
-
-function leaveRoom(goRooms = true) {
-  if (stopPing) { stopPing(); stopPing = null; }
-  if (link) { link.close(); link = null; }
-  resetMatchState();
-  if (goRooms) { void refresh(); setScreen("rooms"); }
-}
-
-function onSocketClose() {
-  if (S.screen === "rooms") return;
-  $("screenReaderStatus").textContent = "与房间的连接已断开。";
-  leaveRoom(true);
-}
-
-function onServerMessage(msg) {
-  switch (msg.t) {
-    case "hello":
-      S.room = msg.room;
-      renderRoom(msg.room);
-      link?.send({ t: "hero", i: selectedHero() });
-      link?.send({ t: "gadget", id: prefsOf().gadget });
-      return;
-    case "room":
-      S.room = msg;
-      renderRoom(msg);
-      if (msg.ph === "staging" && S.screen !== "staging") { hideResults(); setScreen("staging"); }
-      return;
-    case "begin":
-      S.room = msg.room;
-      renderRoom(msg.room);
-      resetMatchState();
-      setScreen("play");
-      play("start");
-      return;
-    case "map":
-      S.map = decodeMap(msg);
-      S.ground = buildGround(S.map);
-      seedFx(msg.seed);
-      primed = false;
-      // 中途加入的人不会收到 `begin`（那是对局开始那一刻的广播），所以他必须靠
-      // "房间已经是 live" 来判断该进场。少这一条，人就会卡在候场页看别人打。
-      if (S.room?.ph === "live" && S.screen !== "play") setScreen("play");
-      return;
-    case "s": return onSnapshot(msg);
-    case "over":
-      S.results = msg.results;
-      showResults(msg.results);
-      primeResultButtons();
-      setScreen("over");
-      play(winFrom(msg.results) ? "win" : "lose");
-      return;
-    case "pong": S.rtt = Math.round(performance.now() - S.lastPingAt); return;
-    case "error":
-      $("screenReaderStatus").textContent = `服务端拒绝：${msg.error}`;
-      if (msg.error === "room_full") leaveRoom(true);
-      return;
-    default: return;
-  }
-}
-
-let primed = false;
-
-function mineIn(snapshot) {
-  return snapshot.a.find(a => a.ow && a.ow === S.meId) || null;
-}
-
-function onSnapshot(snapshot) {
-  pushSnapshot(S, snapshot);
-  consumeEvents(snapshot.ev);
-  const mine = mineIn(snapshot);
-  if (!mine) return;
-  if (snapshot.bx && snapshot.bx.length) applyBoxUpdates(S.map, snapshot.bx);
-  if (S.map && !S.predictW) initPredict(S, S.map, mine);
-  reconcile(S, mine);
-  S.meTeam = mine.tm;
-  S.mine = mine;
-  if (!primed && S.map) {
-    primed = true;
-    primeMatch({ mode: S.map.mode, mapSeed: S.map.seed, hero: mine.h, name: mine.n });
-  }
-  if (mine.of && mine.of.length) showUpgrade(mine.of, mine.lv);
-  else hideUpgrade();
-  updatePerks(mine.pk, perkById);
-}
-
-const winFrom = results => {
-  const me = (results.players || []).find(p => p.ownerId === S.meId);
-  if (!me) return false;
-  return results.kind === "control" ? results.winnerTeam === me.team : me.rank === 1;
-};
-
-function primeResultButtons() {
-  const host = roomIsHost();
-  $("playAgainButton").firstChild.textContent = host ? "再来一局 " : "回到候场 ";
-  $("playAgainButton").disabled = false;
-}
-
-// ---------------------------------------------------------------- 三选一
-
-function showUpgrade(offers, level) {
-  const box = $("upgradeCards");
-  if (box.dataset.for === offers.join(",")) { $("upgradeOverlay").classList.remove("hidden"); return; }
-  box.dataset.for = offers.join(",");
-  box.replaceChildren();
-  $("upgradeTitle").textContent = `LV.${level} · 战场进化`;
-  offers.forEach((id, i) => {
-    const perk = perkById(id);
-    const button = document.createElement("button");
-    button.className = "upgrade-card";
-    button.innerHTML = `<kbd>${i + 1}</kbd><span class="upgrade-icon">${perk.icon}</span>` +
-      `<small>${perk.tag}</small><strong>${perk.name}</strong><p>${perk.description}</p>` +
-      `<em>${(S.mine?.pk?.[id] || 0) ? `强化至 ${S.mine.pk[id] + 1} 层` : "全新强化"}</em>`;
-    button.dataset.perk = id;
-    button.addEventListener("click", () => choosePerk(id));
-    box.append(button);
-  });
-  $("upgradeOverlay").classList.remove("hidden");
-  $("upgradeOverlay").querySelector(".upgrade-card")?.focus({ preventScroll: true });
-}
-
-function hideUpgrade() {
-  $("upgradeOverlay").classList.add("hidden");
-  $("upgradeCards").dataset.for = "";
-}
-
-function choosePerk(id) {
-  link?.send({ t: "perk", id });
-  hideUpgrade();
-  play("click");
-}
 
 // ---------------------------------------------------------------- 主循环
 
@@ -247,7 +68,7 @@ function tickArena(delta, now) {
 
 /** 上行一帧输入。角度与开火都只是**意图**，命中与否由服务端说了算。 */
 function sendInput(now) {
-  if (!link || !S.predictMe || S.screen !== "play") return;
+  if (!S.predictMe || S.screen !== "play") return;
   const me = S.predictMe;
   const frameOut = frameOf(S, me);
   const target = S.assist ? assistTarget() : null;
@@ -255,7 +76,7 @@ function sendInput(now) {
     frameOut.a = Math.round(Math.atan2(target.y - me.y, target.x - me.x) * 1000) / 1000;
     frameOut.f = 1;
   }
-  link.send(frameOut);
+  send(frameOut);
   state.lastSent = now;
 }
 
@@ -288,19 +109,18 @@ function resize() {
 
 // ---------------------------------------------------------------- 接线
 
-function togglePause(show) {
-  $("modalBackdrop").classList.toggle("hidden", !show);
-  $("pauseModal").classList.toggle("hidden", !show);
-  $("helpModal").classList.add("hidden");
-}
-
 function bindShell() {
   $("pauseButton").addEventListener("click", () => togglePause(true));
-  $("resumeButton").addEventListener("click", () => { togglePause(false); clearInputs(S); $("game").focus({ preventScroll: true }); });
+  $("resumeButton").addEventListener("click", () => { togglePause(false); $("game").focus({ preventScroll: true }); });
   $("exitButton").addEventListener("click", () => { togglePause(false); leaveRoom(true); });
   $("restartButton").classList.add("hidden");   // 联机没有"自己重开"，只有房主能重开
-  $("helpLobby").addEventListener("click", () => { $("modalBackdrop").classList.remove("hidden"); $("pauseModal").classList.add("hidden"); $("helpModal").classList.remove("hidden"); });
-  $("helpHeader").addEventListener("click", () => { $("modalBackdrop").classList.remove("hidden"); $("pauseModal").classList.add("hidden"); $("helpModal").classList.remove("hidden"); });
+  const openHelp = () => {
+    $("modalBackdrop").classList.remove("hidden");
+    $("pauseModal").classList.add("hidden");
+    $("helpModal").classList.remove("hidden");
+  };
+  $("helpLobby").addEventListener("click", openHelp);
+  $("helpHeader").addEventListener("click", openHelp);
   $("closeHelp").addEventListener("click", () => togglePause(false));
   document.querySelectorAll(".sound-toggle").forEach(button => button.addEventListener("click", () => {
     const on = toggleSound();
@@ -347,15 +167,16 @@ async function boot() {
   bindShell();
   bindKeys();
   bindAbilityButtons();
-  initLoadout({ onHero: i => link?.send({ t: "hero", i }), onGadget: id => link?.send({ t: "gadget", id }) });
+  bindUpgrade(send);
+  initLoadout({ onHero: i => send({ t: "hero", i }), onGadget: id => send({ t: "gadget", id }) });
   bindRoom({
-    onBots: n => link?.send({ t: "bots", n }),
-    onConfig: patch => link?.send({ t: "config", ...patch }),
-    onStart: () => link?.send({ t: "start" }),
+    onBots: n => send({ t: "bots", n }),
+    onConfig: patch => send({ t: "config", ...patch }),
+    onStart: () => send({ t: "start" }),
     onLeave: () => leaveRoom(true),
   });
   bindResults({
-    onReset: () => { if (roomIsHost()) link?.send({ t: "reset" }); else { hideResults(); setScreen("staging"); } },
+    onReset: () => { if (roomIsHost()) send({ t: "reset" }); else { hideResults(); setScreen("staging"); } },
     onBack: () => { hideResults(); setScreen("staging"); },
   });
   initRooms({ onJoin: roomId => void joinRoom(roomId) });
