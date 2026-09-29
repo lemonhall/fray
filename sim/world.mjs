@@ -71,17 +71,32 @@ export function startMatch(w, roster, seed) {
   return w;
 }
 
-/** 队伍与出生点分配。人类玩家优先，且互相分到对立面。 */
+/**
+ * 队伍与出生点分配：**人类选的边优先**，没选或那边满了才由服务端按人少的一边补。
+ *
+ * 这里刻意不做"让真人一定分属两队"的强制（第一版是 `i % 2`）：现在真人可以自己
+ * 选边，两个朋友想在一队是天经地义的事。想要"一定能对枪"的人，用自动分配即可
+ * ——自动那一路就是按人数差补的。
+ */
 function assignTeams(w, roster) {
   const humans = roster.filter(r => r.kind === "human");
   const bots = roster.filter(r => r.kind !== "human");
-  if (w.mode !== "control") {
+  const cfg = MODES[w.mode] || MODES.control;
+  if (!cfg.teams) {
     return [...humans, ...bots].map((r, i) => ({ ...r, team: i, spawnIndex: i }));
   }
-  const slots = 6;
-  const out = humans.slice(0, slots).map((r, i) => ({ ...r, team: i % 2, spawnIndex: 0 }));
+  const slots = cfg.maxHumans;
+  const perTeam = cfg.humansPerTeam || Math.ceil(slots / cfg.teams);
+  const out = [];
   const counts = [0, 0];
-  for (const e of out) counts[e.team]++;
+  for (const r of humans.slice(0, slots)) {
+    const want = r.team === 0 || r.team === 1 ? r.team : null;
+    const team = want !== null && counts[want] < perTeam
+      ? want
+      : (counts[0] <= counts[1] ? 0 : 1);
+    counts[team]++;
+    out.push({ ...r, team, spawnIndex: 0 });
+  }
   for (const b of bots) {
     if (out.length >= slots) break;
     const team = counts[0] <= counts[1] ? 0 : 1;

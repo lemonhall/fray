@@ -8,8 +8,11 @@
  * 一个都没变，`index.mjs` 和测试都不用改。
  */
 
-import { addMember, removeMember, isHost, setBots, setConfig, setMemberGadget, view as roomView } from "./room-state.mjs";
-import { joinLive, dropPlayer } from "./room-match.mjs";
+import {
+  addMember, removeMember, isHost, setBots, setConfig, setMemberGadget,
+  setReady, setTeam, kickMember, view as roomView,
+} from "./room-state.mjs";
+import { joinLive, dropPlayer, ejectFromWorld } from "./room-match.mjs";
 import { ALARM_MS, MAX_MSGS_PER_SEC } from "./room-consts.mjs";
 import { resetQueue } from "../sim/netcode.mjs";
 
@@ -82,6 +85,18 @@ export function onMessage(room, ws, data) {
     case "gadget":
       setMemberGadget(room.state, conn.playerId, msg.id);
       return broadcastRoom(room);
+    // 举手 / 取消举手。房主的"开打"按钮就是他的表态，所以服务端会拒掉房主的 ready。
+    case "ready":
+      setReady(room.state, conn.playerId, !!msg.v);
+      void room.persist();
+      return broadcastRoom(room);
+    case "team": {
+      const ok = setTeam(room.state, conn.playerId, msg.tm === undefined ? null : msg.tm);
+      if (!ok) return sendTo(ws, { t: "error", error: "team_rejected" });
+      void room.persist();
+      return broadcastRoom(room);
+    }
+    case "kick": return kick(room, ws, conn, msg);
     case "bots":
       if (!isHost(room.state, conn.playerId)) return;
       setBots(room.state, msg.n);
@@ -98,6 +113,32 @@ export function onMessage(room, ws, data) {
     case "in": return room.input(conn, msg);
     default: return;
   }
+}
+
+/**
+ * 踢人：只有房主能踢、不能踢自己、踢了要**当场把人请出连接**。
+ *
+ * 顺序是有讲究的：先从名册里摘掉（服务端权威立刻生效），再关连接。反过来做的话，
+ * 关闭事件会先跑一遍 `detach`，那一遍仍然会走"正常离开"的路径——名册上是干净了，
+ * 但"被踢"这件事就没人知道了，玩家只会看到"连接断开"。
+ */
+function kick(room, ws, conn, msg) {
+  if (!isHost(room.state, conn.playerId)) return;
+  const target = String(msg.id || "");
+  if (!target || target === conn.playerId) {
+    return sendTo(ws, { t: "error", error: "kick_self" });
+  }
+  if (!kickMember(room.state, target)) return sendTo(ws, { t: "error", error: "kick_missing" });
+  ejectFromWorld(room.world, target);
+  for (const [peer, other] of room.conns) {
+    if (other.playerId !== target) continue;
+    sendTo(peer, { t: "kicked" });
+    try { peer.close(1008, "kicked"); } catch { /* 已经关了 */ }
+    room.conns.delete(peer);
+  }
+  broadcastRoom(room);
+  void room.persist();
+  void room.publish();
 }
 
 /** 名册/阶段有任何变化就广播一次：房主和普通玩家收到的是同一份数据。 */

@@ -1,9 +1,9 @@
 /**
- * 本地双客户端联调：两个浏览器各自扮演一个真人，走完"开房 → 加入 → 放机器人 →
- * 开打 → 进场 → 移动 → 对射"的全流程。
+ * 本地联调的**场景**：几个浏览器各自扮演一个真人，走完"开房 → 拉人 → 放机器人 →
+ * 举手 → 开打 → 进场 → 移动 → 邀请链接补位 → 对射"的全流程。
  *
  * 为什么要有这个脚本：单元测试只能证明"内核算得对"，房间名册和 WebSocket 串联
- * 起来对不对，只有真开两个浏览器才知道。它跑在**已启动的** `wrangler dev` 之上，
+ * 起来对不对，只有真开浏览器才知道。它跑在**已启动的** `wrangler dev` 之上，
  * 自己不起服务，也不碰线上账号——所以它不会产生任何账单。
  *
  * 用法：
@@ -11,93 +11,11 @@
  *   E2E_BASE=http://127.0.0.1:8788 node tools/e2e-local.mjs
  *   E2E_HEADED=1 node tools/e2e-local.mjs      # 想看着它打，就把窗口开出来
  *
- * 需要 Playwright 与本机 Chrome（用 `channel:"chrome"`，所以**不下载**它自带的那
- * 几百兆浏览器）。Playwright 装在本仓库 (`npm i -D playwright`) 或全局都行：
- * 全局装的话给它指个路 —— `E2E_PLAYWRIGHT_DIR=/path/to/node_modules`。
+ * 起浏览器、读页面状态、等条件的那些机械动作在 `tools/e2e-harness.mjs` ——
+ * 这个文件只关心"测什么"。
  */
 
-/** 先按常规解析；找不到再试用户给的全局 node_modules。这两步都是显式的。 */
-async function loadPlaywright() {
-  try {
-    return await import("playwright");
-  } catch (error) {
-    const dir = process.env.E2E_PLAYWRIGHT_DIR;
-    if (!dir) {
-      throw new Error(`解析不到 playwright（${error.message}）。装一个，或设 E2E_PLAYWRIGHT_DIR 指向装它的 node_modules。`);
-    }
-    return import(new URL("playwright/index.mjs", `file:///${dir.replace(/\\/gu, "/").replace(/\/?$/u, "/")}`).href);
-  }
-}
-
-const { chromium } = await loadPlaywright();
-
-const BASE = process.env.E2E_BASE || "http://127.0.0.1:8790";
-const HEADLESS = process.env.E2E_HEADED !== "1";
-const logs = [];
-
-const log = (ok, name, extra = "") => {
-  const line = `${ok ? "✔" : "✘"} ${name}${extra ? ` — ${extra}` : ""}`;
-  logs.push(line);
-  console.log(line);
-};
-
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-
-async function until(fn, { timeout = 20000, every = 250, what = "条件" } = {}) {
-  const deadline = Date.now() + timeout;
-  let last;
-  while (Date.now() < deadline) {
-    last = await fn();
-    if (last) return last;
-    await sleep(every);
-  }
-  throw new Error(`等待超时：${what}${last === undefined ? "" : `（最后一次读到 ${JSON.stringify(last)}）`}`);
-}
-
-/** 从页面里读一份"我现在看到了什么"——诊断信息比断言本身更重要。 */
-const observe = page => page.evaluate(async () => {
-  const { S } = await import("/js/state.mjs");
-  const snap = S.snaps[S.snaps.length - 1] || null;
-  const text = id => (document.getElementById(id) || {}).textContent || "";
-  return {
-    screen: S.screen,
-    connected: S.connected,
-    meId: S.meId,
-    tenant: S.tenant,
-    connText: text("connText"),
-    title: text("roomTitle"),
-    botCount: text("botCount"),
-    roster: document.querySelectorAll("#rosterRows .roster-chip").length,
-    cards: document.querySelectorAll("#roomList .room-card").length,
-    mapSeed: S.map ? S.map.seed : null,
-    self: S.mine ? { x: S.mine.x, y: S.mine.y, tm: S.mine.tm, hp: S.mine.hp, al: S.mine.al, h: S.mine.h } : null,
-    actors: snap ? snap.a.map(a => ({ ow: a.ow, k: a.k, tm: a.tm, al: a.al })) : [],
-    bullets: snap ? snap.b.length : 0,
-    score: snap ? snap.sc : null,
-    ticks: snap ? snap.tk : 0,
-    feed: text("killFeed").replace(/\s+/gu, " ").slice(0, 160),
-    healthText: text("healthText"),
-  };
-});
-
-async function openClient(browser, nick) {
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  const page = await context.newPage();
-  page.on("pageerror", error => console.log(`  [${nick}] 页面报错：${error.message}`));
-  page.on("console", msg => { if (msg.type() === "error") console.log(`  [${nick}] console：${msg.text()}`); });
-  await page.goto(BASE, { waitUntil: "domcontentloaded" });
-  await page.fill("#nickInput", nick);
-  await page.dispatchEvent("#nickInput", "change");
-  await until(async () => (await observe(page)).connText.includes("已连接"), { what: `${nick} 拿到会话` });
-  return page;
-}
-
-/** 真人输入走真实事件，而不是直接改 `S`——否则测的就不是"输入上行"这条链路了。 */
-async function holdKey(page, code, ms) {
-  await page.evaluate(c => document.dispatchEvent(new KeyboardEvent("keydown", { code: c })), code);
-  await sleep(ms);
-  await page.evaluate(c => document.dispatchEvent(new KeyboardEvent("keyup", { code: c })), code);
-}
+import { chromium, HEADLESS, BASE, sleep, until, observe, openClient, holdKey, log } from "./e2e-harness.mjs";
 
 async function main() {
   const browser = await chromium.launch({ channel: "chrome", headless: HEADLESS });
@@ -105,7 +23,8 @@ async function main() {
   try {
     // ---------------------------------------------------------------- 1. 房间浏览器
     const host = await openClient(browser, "柠檬叔");
-    const guest = await openClient(browser, "测试员");
+    // 访客故意不预置名字：他要走一遍"点进房间 → 被问名字 → 落库"的真实路径。
+    const guest = await openClient(browser, "测试员", { seed: false });
     const browse = await observe(host);
     steps.push(["进站后看到房间浏览器与租户", browse.screen === "rooms" && browse.tenant === "neon",
       `租户 ${browse.tenant}`]);
@@ -122,6 +41,11 @@ async function main() {
     await guest.click("#refreshRooms");
     await until(async () => (await observe(guest)).cards > 0, { what: "访客看到房间卡片" });
     await guest.click("#roomList .room-card");
+    // 起名弹窗：第一次进房必须先留个名字，否则一屋子人都叫"游客"。
+    const asked = await until(async () => !(await guest.locator("#nameBackdrop").isHidden()),
+      { what: "起名弹窗", timeout: 8000, every: 150 }).then(() => true).catch(() => false);
+    await guest.fill("#nameInput", "测试员");
+    await guest.click("#nameConfirm");
     const RENAME = { what: "两人同在候场，且房间视图已经推到两边" };
     const bothStaged = await until(async () => {
       const [a, b] = [await observe(host), await observe(guest)];
@@ -129,6 +53,8 @@ async function main() {
       return ready(a) && ready(b) ? [a, b] : null;
     }, RENAME);
     steps.push(["第二个真人能从列表加入房间", true, `房间「${bothStaged[1].title}」`]);
+    steps.push(["第一次进房先弹窗起名，名字落进 localStorage 并写进名册",
+      asked && bothStaged[1].names.includes("测试员"), `名册：${bothStaged[1].names.join("、")}`]);
 
     // ---------------------------------------------------------------- 3. 房主部署机器人
     await host.click('#botStepper [data-bot="1"]');
@@ -145,6 +71,39 @@ async function main() {
       [...document.querySelectorAll("#botStepper button")].every(b => b.disabled));
     steps.push(["非房主看到的是不可点的机器人控件", guestDisabled]);
 
+    // ---------------------------------------------------------------- 3.2 选边
+    // 分队模式里，真人自己选边——"想跟朋友一队"只有这一条路。界面上要看得见这个流程，
+    // 服务端才会认；所以这里从**点按钮**开始测，而不是直接改 S。
+    //
+    // 访客选**红队**、房主保持「自动」：自动分配是"往人少的那边补"，所以两人会各占
+    // 一边——这正是第 6 步"看得见人类对手"成立的前提。（要是两人都选蓝队，他们就
+    // 该是队友，那是这一版刻意允许的，但不是这条断言要验的东西。）
+    await guest.click('#teamPicker [data-team="1"]');
+    const sided = await until(async () => {
+      const [a, b] = [await observe(host), await observe(guest)];
+      const index = a.names.indexOf("测试员");
+      return index >= 0 && a.sides[index] === 1 && b.myTeam === 1 ? [a, b] : null;
+    }, { what: "访客选边同步到房主" }).catch(() => null);
+    steps.push(["访客自己选红队，房主的名册上也显示红队", !!sided,
+      sided ? `名册侧别 ${JSON.stringify(sided[0].sides)}` : "没等到选边生效"]);
+
+    // ---------------------------------------------------------------- 3.5 举手与开局闸门
+    // 访客没举手之前，房主的开打按钮必须是灰的——"等大家举手"这句提示也就成立了。
+    const gated = await until(async () => {
+      const a = await observe(host);
+      return a.allReady === false && a.startEnabled === false ? a : null;
+    }, { what: "房主的开打按钮被举手闸门按住" }).catch(() => null);
+    steps.push(["有人没举手时，房主的开打按钮是灰的", !!gated,
+      gated ? `名册 ${gated.names.join("、")}` : "没等到闸门生效"]);
+
+    await guest.click("#readyButton");
+    const unlocked = await until(async () => {
+      const [a, b] = [await observe(host), await observe(guest)];
+      return a.allReady === true && a.startEnabled === true && b.readyOn === true ? [a, b] : null;
+    }, { what: "举手之后房主的开打按钮亮起来" }).catch(() => null);
+    steps.push(["访客举手之后，房主可以开打（两边状态一致）", !!unlocked,
+      unlocked ? "allReady=true / start 可点 / 我这边显示已举手" : "没等到解锁"]);
+
     // ---------------------------------------------------------------- 4. 开打
     // `begin` 只负责切屏，地图是紧接着单独一条报文——所以要等到 seed 真的到了才算进场。
     const startAt = Date.now();
@@ -160,7 +119,40 @@ async function main() {
     // 少这一帧，两边互等，只能等 5 秒的 alarm 兜底——所以这里卡一个紧的时间上限。
     steps.push(["开打后 2.5 秒内就有第一帧快照（不靠 alarm 兜底）", startMs < 2500, `${startMs}ms`]);
 
-    // ---------------------------------------------------------------- 5. 混战名册
+    // ---------------------------------------------------------------- 5. 移动：本地预测 + 服务端对账
+    // **跟着"进场"紧接着跑**：这时候双方都是刚出生的满血状态。放到后面去测，
+    // 一旦角色被机器人打死（3v3 里几秒钟的事），"按 W 走不动"就变成了在验尸体。
+    const before = (await observe(host)).self;
+    await holdKey(host, "KeyW", 700);
+    await sleep(900);
+    const after = (await observe(host)).self;
+    const moved = Math.hypot(after.x - before.x, after.y - before.y);
+    steps.push(["按 W 之后，服务端认得我移动了", moved > 12 && after.al === 1,
+      `位移 ${moved.toFixed(1)}px（权威坐标，不是本机预测）`]);
+
+    // ---------------------------------------------------------------- 5.5 邀请链接
+    // "拉人"必须一条链接就够：拿到链接的人直接进门，不用先在列表里翻房间号。
+    // 这里刻意挑**对局中**测——那是最难的一种：他要现补一个实体进场。
+    const roomId = (await observe(host)).roomId;
+    const invite = await host.evaluate(async id => (await import("/js/invite.mjs")).inviteLink(id), roomId);
+    const lateContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const late = await lateContext.newPage();
+    await late.goto(invite, { waitUntil: "domcontentloaded" });
+    const askedLate = await until(async () => !(await late.locator("#nameBackdrop").isHidden()),
+      { what: "拿到链接的人被问名字", timeout: 8000, every: 150 }).then(() => true).catch(() => false);
+    await late.fill("#nameInput", "链接来客");
+    await late.click("#nameConfirm");
+    const linked = await until(async () => {
+      const [a, b] = [await observe(host), await observe(late)];
+      return b.roomId === roomId && b.screen === "play" && b.self && a.names.includes("链接来客")
+        ? [a, b] : null;
+    }, { what: "拿到链接的人补位进场", timeout: 20000 }).catch(() => null);
+    steps.push(["邀请链接直接把人送进同一间房，并在对局中补位",
+      !!linked && askedLate && invite.includes(`room=${roomId}`),
+      linked ? `${invite.replace(BASE, "")} · 名册 ${linked[0].names.join("、")}` : "没等到进场"]);
+    await lateContext.close();
+
+    // ---------------------------------------------------------------- 6. 混战名册
     // 可见性是按视角裁剪出来的，所以"某一瞬间看得见谁"取决于站位与草丛——
     // 这里累计一段时间，断言的是"这段时间里两类实体都出现过"，而不是"第一帧就有"。
     const seen = { humans: 0, bots: 0 };
@@ -175,15 +167,6 @@ async function main() {
     }, { what: "快照里同时出现过真人对手与机器人", timeout: 30000, every: 700 }).catch(() => null);
     steps.push(["我方能看见对面对手与机器人（可见性过滤之后的快照）",
       !!seen.humans && !!seen.bots, `看得见真人 ${seen.humans} 类 / 机器人 ${seen.bots} 类`]);
-
-    // ---------------------------------------------------------------- 6. 移动：本地预测 + 服务端对账
-    const before = (await observe(host)).self;
-    await holdKey(host, "KeyW", 700);
-    await sleep(900);
-    const after = (await observe(host)).self;
-    const moved = Math.hypot(after.x - before.x, after.y - before.y);
-    steps.push(["按 W 之后，服务端认得我移动了", moved > 12 && after.al === 1,
-      `位移 ${moved.toFixed(1)}px（权威坐标，不是本机预测）`]);
 
     // ---------------------------------------------------------------- 7. 开火：对方能看见我的子弹
     await host.mouse.move(720, 450);

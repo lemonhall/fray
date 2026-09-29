@@ -41,6 +41,10 @@ function connect(url) {
   const ws = new WebSocket(url);
   const queue = [];
   const waiters = [];
+  // 记下"连接什么时候被关了"。跨境链路上偶发一次断流并不稀奇，但**超时的报错里
+  // 必须能看出是"连接断了"还是"服务端压根没发"**——否则每次偶发都得重新猜一遍。
+  let closedCode = null;
+  ws.addEventListener("close", ev => { closedCode = ev.code; });
   ws.addEventListener("message", ev => {
     let msg;
     try { msg = JSON.parse(String(ev.data)); } catch { return; }
@@ -55,7 +59,7 @@ function connect(url) {
       const w = { match, resolve, timer: setTimeout(() => {
         const i = waiters.indexOf(w);
         if (i >= 0) waiters.splice(i, 1);
-        reject(new Error("等待消息超时"));
+        reject(new Error(`等待消息超时${closedCode === null ? "" : `（连接已被关闭 code=${closedCode}）`}`));
       }, ms) };
       waiters.push(w);
     });
@@ -100,6 +104,13 @@ async function main() {
   const anonDenied = await anon.opened.then(() => false).catch(() => true);
   check("不带令牌的 WebSocket 被拒", anonDenied);
 
+  // 邀请链接会被人传来传去，散掉的房间必须得到一个干脆的"没有这一间"，
+  // 而不是一条挂在那儿等超时的连接（前端的 `?room=` 就靠这个说人话）。
+  const ghost = await api(`/v1/${TENANT}/rooms/ZZZZZZ/socket`, { token });
+  check("过期邀请链接（房间不存在）被明确拒绝",
+    ghost.status === 404 && ghost.data?.error === "unknown_room",
+    `${ghost.status} ${ghost.data?.error}`);
+
   const host = connect(`${WS_BASE}/v1/${TENANT}/rooms/${roomId}/socket?token=${encodeURIComponent(token)}`);
   await host.opened;
   const hello = await host.next(m => m.t === "hello");
@@ -108,6 +119,42 @@ async function main() {
   host.send({ t: "bots", n: 5 });
   const withBots = await host.next(m => m.t === "room" && m.bots === 5);
   check("房主把机器人调到 5 个", !!withBots);
+
+  // ---------------------------------------------------------------- 举手与开局闸门
+  // 第二个真人：他还没举手的时候，房主按开打必须被服务端挡下来（界面上的按钮
+  // 变灰只是投影，真正的拒绝在这条断言里）。
+  const peer = await api(`/v1/${TENANT}/guest`, { method: "POST", body: { name: "冒烟陪练" } });
+  const mate = connect(`${WS_BASE}/v1/${TENANT}/rooms/${roomId}/socket?token=${encodeURIComponent(peer.data.token)}`);
+  await mate.opened;
+  const mateHello = await mate.next(m => m.t === "hello");
+  check("第二个真人进得来，名册两边一致",
+    mateHello.room?.members?.length === 2 && mateHello.room.you.host === false,
+    `名册 ${mateHello.room?.members?.length} 人`);
+  const sideShown = (await host.next(m => m.t === "room" && m.members.length === 2));
+  check("候场名册里两个人都在，且都没举手",
+    sideShown.members.every(m => m.rdy === 0) && sideShown.allReady === false);
+
+  host.send({ t: "start" });
+  const refused = await host.next(m => m.t === "error");
+  check("有人没举手时，房主开不了局",
+    refused.error === "not_ready" && (refused.pending || []).includes("冒烟陪练"),
+    `pending=${JSON.stringify(refused.pending)}`);
+
+  mate.send({ t: "ready", v: 1 });
+  // 断言里必须带 `members.length === 2`：房主自己进场时也广播过一条"1 人名册"，
+  // 那时候 allReady 天然是 true，不锁人数就会抓到那条旧消息（踩过一次）。
+  const allReady = await host
+    .next(m => m.t === "room" && m.members.length === 2 && m.allReady === true, 5000)
+    .catch(() => null);
+  check("陪练举手之后，两边都看到全员就绪",
+    !!allReady && allReady.members.some(m => m.rdy === 1), "allReady=true");
+
+  // 选边：只有候场阶段能改，改完服务端要认。
+  mate.send({ t: "team", tm: 1 });
+  const sided = await host
+    .next(m => m.t === "room" && m.members.length === 2 && m.members.some(x => x.tm === 1), 5000)
+    .catch(() => null);
+  check("真人可以自己选边（选完立刻广播）", !!sided, "红队 1 人");
 
   const startedAt = Date.now();
   host.send({ t: "start" });
@@ -118,9 +165,18 @@ async function main() {
   check("开打后 3 秒内有第一帧快照", true, `${Date.now() - startedAt}ms，tick=${firstFrame.tk}`);
   check("快照里能看到我自己（含私有字段）",
     !!meIn(firstFrame, playerId) && typeof meIn(firstFrame, playerId).lv === "number");
-  const bots = firstFrame.a.filter(a => a.k === 0).length;
   const humans = firstFrame.a.filter(a => a.k === 1).length;
-  check("人机同场：1 名真人 + 机器人", humans === 1 && bots >= 1, `真人 ${humans} / 机器人 ${bots}`);
+  // 机器人有几只在第一帧里**看得见**，取决于出生点周围有没有草丛——所以这里累计
+  // 一小段时间，验的是"机器人确实在场上"，而不是"第一帧恰好瞟到一个"。
+  let botsSeen = 0;
+  const botDeadline = Date.now() + 6000;
+  while (Date.now() < botDeadline && !botsSeen) {
+    const frame = await host.next(m => m.t === "s", 2000).catch(() => null);
+    if (!frame) break;
+    botsSeen = frame.a.filter(a => a.k === 0).length;
+  }
+  check("人机同场：2 名真人 + 机器人", humans === 2 && botsSeen >= 1,
+    `真人 ${humans} / 机器人 ${botsSeen}`);
 
   const before = meIn(firstFrame, playerId);
   const baseTick = firstFrame.tk;
@@ -145,6 +201,42 @@ async function main() {
   check("快照带回权威确认点（ak/ax/ay）", Number.isFinite(after?.ak) && Number.isFinite(after?.ax) && after.ak > 0,
     `ack=${after?.ak} @ (${after?.ax}, ${after?.ay})`);
   check("世界持续推进（tick 单调递增）", latest.tk > baseTick, `tick ${baseTick} → ${latest.tk}`);
+
+  // ---------------------------------------------------------------- 踢人
+  // 房主把陪练请出去：对方要收到明确的"被踢了"（而不是一句冷冰冰的断线），
+  // 名册当场减员，而且他十分钟内不能再进这一间。
+  host.send({ t: "kick", id: peer.data.playerId });
+  const gotKicked = await mate.next(m => m.t === "kicked", 5000).catch(() => null);
+  check("被踢的人收到明确的 kicked 通知", !!gotKicked);
+  const afterKick = await host.next(m => m.t === "room" && m.members.length === 1, 5000).catch(() => null);
+  check("踢完之后名册里只剩房主", !!afterKick);
+  const back = connect(`${WS_BASE}/v1/${TENANT}/rooms/${roomId}/socket?token=${encodeURIComponent(peer.data.token)}`);
+  back.opened.catch(() => {});
+  const rejoin = await back.next(m => m.t === "error", 5000).catch(() => null);
+  check("被踢的人十分钟内进不来", rejoin?.error === "kicked", `error=${rejoin?.error}`);
+
+  // ---------------------------------------------------------------- 谢客房
+  // 房主关掉"允许中途加入"之后：开打之前照收人，开打之后新人被挡在门外，
+  // 而已经在房里的人重连不受影响（那是掉线，不是闯门）。
+  const shut = await api(`/v1/${TENANT}/rooms`, {
+    method: "POST", token, body: { name: "谢客房", bots: 1, mode: "control", joinLive: false },
+  });
+  check("建房时能关掉中途加入", shut.status === 201 && shut.data?.room?.join === false,
+    `join=${shut.data?.room?.join}`);
+  const shutRoom = shut.data?.roomId;
+  if (shutRoom) {
+    const keeper = connect(`${WS_BASE}/v1/${TENANT}/rooms/${shutRoom}/socket?token=${encodeURIComponent(token)}`);
+    await keeper.opened;
+    await keeper.next(m => m.t === "hello");
+    keeper.send({ t: "start" });
+    await keeper.next(m => m.t === "map");
+    await keeper.next(m => m.t === "s", 4000);
+    const late = connect(`${WS_BASE}/v1/${TENANT}/rooms/${shutRoom}/socket?token=${encodeURIComponent(peer.data.token)}`);
+    late.opened.catch(() => {});
+    const door = await late.next(m => m.t === "error", 5000).catch(() => null);
+    check("开着谢客的对局里，新人被挡在门外", door?.error === "join_closed", `error=${door?.error}`);
+    keeper.ws.close();
+  }
 
   host.ws.close();
   await sleep(50);

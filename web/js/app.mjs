@@ -28,6 +28,7 @@ import { initLoadout, resizeShowcase, renderShowcase, selectedHero, prefsOf } fr
 import { joinRoom, leaveRoom, send } from "./session.mjs";
 import { setScreen, togglePause } from "./screens.mjs";
 import { bindUpgrade, choosePerk } from "./upgrade.mjs";
+import { joinFromLink, copyInvite } from "./invite.mjs";
 
 const $ = id => document.getElementById(id);
 /** 单帧最多补几格（60Hz 下的 400ms）：浏览器卡一下之后要把时间补回来，不能靠丢时间混过去。 */
@@ -180,6 +181,12 @@ async function boot() {
     onConfig: patch => send({ t: "config", ...patch }),
     onStart: () => send({ t: "start" }),
     onLeave: () => leaveRoom(true),
+    // 举手 / 选边 / 踢人：三个都是"我的意图"，服务端才是拍板的那一方。
+    onReady: v => send({ t: "ready", v }),
+    onTeam: tm => send({ t: "team", tm: tm === null ? "auto" : tm }),
+    onKick: id => send({ t: "kick", id }),
+    // 分享：一条链接把朋友拉进这间房（房间码大小写都认）。
+    onShare: id => void copyInvite(id),
   });
   bindResults({
     onReset: () => { if (roomIsHost()) send({ t: "reset" }); else { hideResults(); setScreen("staging"); } },
@@ -196,6 +203,8 @@ async function boot() {
   initAudio();
   setScreen("rooms");
   await connect();
+  // `?room=CODE`：拿到邀请链接的人直接进场，不必先在列表里找房间。
+  await joinFromLink();
   requestAnimationFrame(frame);
   window.FRAY = { version: "1.0", S, snapshot: () => ({ screen: S.screen, room: S.room, me: S.mine, rtt: S.rtt }) };
 }

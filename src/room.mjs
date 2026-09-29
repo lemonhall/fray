@@ -95,7 +95,8 @@ export class Room extends DurableObject {
   start(ws, conn) {
     if (!isHost(this.state, conn.playerId) || this.state.phase === "live") return;
     const check = startCheck(this.state);
-    if (!check.ok) return this.sendTo(ws, { t: "error", error: check.error });
+    // 把"谁还没举手"一起带回去：只回一句 not_ready，房主还得自己数名册。
+    if (!check.ok) return this.sendTo(ws, { t: "error", error: check.error, pending: check.pending });
     const { world, mapMsg } = beginMatch(this.state);
     this.world = world;
     this.mapMsg = mapMsg;

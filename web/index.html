@@ -29,7 +29,7 @@
 <header class="rooms-head">
 <div class="rooms-brand"><span class="brand-mark">F<span>↗</span></span><div>FRAY<small>霓虹前线 / SERVER AUTHORITATIVE</small></div></div>
 <div class="rooms-id">
-<label class="nick-field"><span>昵称</span><input id="nickInput" maxlength="16" autocomplete="off" spellcheck="false" placeholder="柠檬叔"></label>
+<label class="nick-field"><span>昵称</span><input id="nickInput" maxlength="16" autocomplete="off" spellcheck="false" placeholder="点进房间时再起"></label>
 <span class="conn-pill" id="connPill"><i></i><b id="connText">连接中…</b></span>
 <button class="icon-button sound-toggle" title="音效开关" aria-label="音效开关"><svg><use href="#i-sound"/></svg></button>
 </div>
@@ -49,9 +49,10 @@
 <label><span>模式</span><select id="createMode"><option value="control">热点争夺 · 3V3</option><option value="survival">荒野生存 · 混战</option></select></label>
 <label><span>机器人难度</span><select id="createDifficulty"><option value="0">轻松</option><option value="1" selected>标准</option><option value="2">老兵</option></select></label>
 <label><span>机器人数量</span><input id="createBots" type="number" min="0" max="9" value="4"></label>
+<label><span>对局中</span><select id="createJoinLive"><option value="1" selected>允许中途加入</option><option value="0">开打之后谢客</option></select></label>
 <button id="createRoomButton" class="primary-button">建立房间</button>
 <button id="cancelCreate" class="text-button">取消</button>
-<p class="create-hint" id="createHint">机器人负责补位，一个人也能开打；真人进来会占掉机器人名额。</p>
+<p class="create-hint" id="createHint">机器人负责补位，一个人也能开打；真人进来会占掉机器人名额。开打前需要所有真人举手，房主也可以在候场阶段把人请出去。</p>
 </div>
 <div class="room-list" id="roomList"></div>
 <p class="rooms-note" id="roomsNote">房间列表每 4 秒自动刷新。</p>
@@ -59,7 +60,7 @@
 <aside class="rooms-side">
 <div class="side-panel"><div class="side-panel-head">排行榜 <span>LEADERBOARD</span></div><div id="boardRows" class="side-rows"></div></div>
 <div class="side-panel"><div class="side-panel-head">最近战绩 <span>RECENT</span></div><div id="matchRows" class="side-rows"></div></div>
-<div class="side-panel"><div class="side-panel-head">怎么玩 <span>STEPS</span></div><ol class="side-steps"><li>输个昵称，进房间或点快速匹配。</li><li>房主按「+」投放机器人、调难度。</li><li>房主开打，人和机器人同场竞技。</li></ol></div>
+<div class="side-panel"><div class="side-panel-head">怎么玩 <span>STEPS</span></div><ol class="side-steps"><li>点进一间房，先给自己的名字。</li><li>分队模式里选边，然后点「我准备好了」。</li><li>房主投放机器人、调难度，全员举手后开打。</li></ol></div>
 </aside>
 </div>
 </section>
@@ -69,6 +70,7 @@
 <strong id="roomTitle">房间</strong>
 <span class="room-code" id="roomCodeLabel">#------</span>
 <span class="room-meta" id="roomMeta">热点争夺 · 0 人 + 0 机器人</span>
+<button class="text-button" id="shareRoomButton">复制邀请链接 <span>↗</span></button>
 <button class="text-button" id="leaveRoomButton">离开房间 <span>↗</span></button>
 </div>
 <aside class="roster-panel" id="rosterPanel" aria-label="参战名册">
@@ -81,6 +83,17 @@
 <b id="botCount">4</b>
 <button type="button" data-bot="1" aria-label="增加机器人">+</button>
 </div>
+<div class="team-picker hidden" id="teamPicker" role="group" aria-label="选边">
+<span>我的阵营 <b>TEAM</b></span>
+<button type="button" data-team="auto" aria-pressed="true">自动</button>
+<button type="button" data-team="0" aria-pressed="false"><i class="team-dot blue"></i>蓝队</button>
+<button type="button" data-team="1" aria-pressed="false"><i class="team-dot red"></i>红队</button>
+</div>
+<label class="switch-field hidden" id="joinLiveField" title="只有房主能改">
+<input type="checkbox" id="joinLiveToggle">
+<span>允许中途加入</span>
+</label>
+<button type="button" class="ready-button" id="readyButton">我准备好了</button>
 <span class="roster-note" id="rosterNote">等待房主开始…</span>
 </div>
 </aside>
@@ -112,7 +125,9 @@
 <div id="upgradeOverlay" class="upgrade-overlay hidden"><section class="upgrade-dialog" role="dialog" aria-modal="true" aria-labelledby="upgradeTitle"><span class="modal-eyebrow">EVOLVE YOUR PLAYSTYLE</span><h2 id="upgradeTitle">战场进化</h2><p>三选一，构筑你的专属打法。<span>战斗已暂停</span></p><div id="upgradeCards" class="upgrade-cards"></div><small class="upgrade-hint">点击选择 · 或按数字 1 / 2 / 3</small></section></div>
 <div id="modalBackdrop" class="modal-backdrop hidden"><section class="modal" id="pauseModal" role="dialog" aria-modal="true" aria-labelledby="pauseTitle"><span class="modal-eyebrow">TACTICAL PAUSE</span><h2 id="pauseTitle">喘口气，再来。</h2><p>战场已暂停。战术装置与超级技能可以改变战局。</p><button id="resumeButton" class="primary-button">继续战斗 <span>↗</span></button><button id="restartButton" class="secondary-button">重新开局</button><button id="exitButton" class="text-button">返回大厅</button></section><section class="modal help-modal hidden" id="helpModal" role="dialog" aria-modal="true" aria-labelledby="helpTitle"><span class="modal-eyebrow">FIELD MANUAL / 2.0</span><h2 id="helpTitle">不止是开枪。</h2><div class="help-grid"><div><kbd>WASD / 方向键</kbd><strong>移动与走位</strong><p>利用墙体挡弹，进入全息灌木隐蔽。</p></div><div><kbd>鼠标左键 / F</kbd><strong>射击 / 辅助开火</strong><p>长按射击，F 切换自动瞄准与开火。</p></div><div><kbd>Q / 右键 · E</kbd><strong>超级技能 · 战术装置</strong><p>命中蓄能释放大招；E 装置按冷却重复使用。</p></div><div><kbd>SPACE · 1 / 2 / 3</kbd><strong>闪避 · 选择强化</strong><p>空格冲刺并短暂无敌，升级时三选一。</p></div></div><div class="help-rules"><p><b>热点争夺：</b>你与 2 个 AI 队友对抗 3 个 AI；独占热点即可持续得分，双方在圈内时暂停计分。先到 100 分获胜，3 分钟后比较得分，平分进入加时；热点每 40 秒迁移。倒下 4 秒后重生。</p><p><b>荒野生存：</b>与 9 个 AI 混战，最后存活获胜；20 秒后风暴缩圈。击碎箱子、拾取能量提升生命与伤害。</p><p><b>进化与补给：</b>有效伤害、能量和占点提供经验；每次升级三选一，最多升至 6 级。空投恢复生命、弹药与超能，开启 7 秒火力加速。两种模式均可进化。</p><p><b>恢复与触屏：</b>脱战 3.5 秒自动回血；左摇杆移动，右摇杆拖动瞄准开火，轻点自动瞄准。辅助开火仍需自行走位。触屏横屏视野更开阔。</p></div><button id="closeHelp" class="primary-button">准备好了 <span>↗</span></button></section></div>
 <section id="results" class="result-screen hidden" aria-label="对战结算"><div class="result-confetti" id="confetti"></div><div class="result-card"><span class="modal-eyebrow" id="resultEyebrow">MATCH COMPLETE</span><div class="result-rank" id="resultRank">WIN</div><h2 id="resultTitle">漂亮的配合。</h2><p id="resultDescription"></p><div class="result-stats"><div><strong id="resultKills">0</strong><span>淘汰对手</span></div><div><strong id="resultDamage">0</strong><span>有效伤害</span></div><div><strong id="resultTime">00:00</strong><span>对战时长</span></div></div><div class="result-build" id="resultBuild"></div><div class="result-xp"><span id="resultXP">+120 XP</span><small id="resultContracts">本局挑战 0 / 3</small></div><div class="result-reward"><svg><use href="#i-cup"/></svg><span id="resultRecord"></span></div><button id="playAgainButton" class="primary-button">再来一局 <span>↗</span></button><button id="lobbyButton" class="text-button">返回大厅 · 调整配置</button></div></section>
-<div class="sr-only" id="screenReaderStatus" aria-live="polite"></div></main>
+<div class="sr-only" id="screenReaderStatus" aria-live="polite"></div>
+<div id="nameBackdrop" class="modal-backdrop hidden"><section class="modal name-modal" id="nameModal" role="dialog" aria-modal="true" aria-labelledby="nameTitle"><span class="modal-eyebrow">CALLSIGN CHECK</span><h2 id="nameTitle">先留个名字。</h2><p>它会出现在名册、击杀播报和排行榜上。之后在大厅右上角随时能改。</p><label class="name-field"><span>我的昵称</span><input id="nameInput" maxlength="16" autocomplete="off" spellcheck="false" placeholder="比如：柠檬叔"></label><p class="name-error hidden" id="nameError">名字不能是空的。</p><button id="nameConfirm" class="primary-button">就这么定了 <span>↗</span></button><button id="nameSkip" class="text-button">随便给一个</button></section></div>
+</main>
 <script type="module" src="/js/app.mjs"></script>
 </body>
 </html>

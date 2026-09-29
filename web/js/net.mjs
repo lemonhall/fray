@@ -44,8 +44,12 @@ export function openSocket(roomId, handlers = {}) {
   const base = apiUrl(tenantPath(`/rooms/${encodeURIComponent(roomId)}/socket`));
   const wsUrl = base.replace(/^http/u, "ws") + `?token=${encodeURIComponent(S.token)}`;
   const ws = new WebSocket(wsUrl);
-  ws.addEventListener("open", () => { S.connected = true; handlers.onOpen?.(); });
-  ws.addEventListener("close", () => { S.connected = false; handlers.onClose?.(); });
+  // `opened` 分得开两种"断了"：**握手就没成**（房间不存在、令牌不对、满员被拒）和
+  // **进房之后才断**（网络抖了）。前者要说"这一间进不去"，后者才是"掉线了"——
+  // WebSocket 的 API 不告诉我们会话是怎么失败的，这个布尔值是唯一的线索。
+  let opened = false;
+  ws.addEventListener("open", () => { opened = true; S.connected = true; handlers.onOpen?.(); });
+  ws.addEventListener("close", () => { S.connected = false; handlers.onClose?.({ opened }); });
   ws.addEventListener("error", () => { S.connected = false; handlers.onError?.("socket_error"); });
   ws.addEventListener("message", event => {
     let msg;

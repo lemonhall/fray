@@ -185,6 +185,9 @@ function roomConfig(tenant, body, session) {
     mode: body.mode === "survival" ? "survival" : "control",
     difficulty: Number(body.difficulty) || 0,
     bots: Math.max(0, Math.min(rules.maxBotsPerRoom, Number(body.bots) ?? 4)),
+    // 建房表单里的"允许中途加入"。缺省为开——这就是改版前的行为，不能让老客户端
+    // 因为少传一个字段就忽然进不去正在打的房间。
+    joinLive: body.joinLive !== false,
     hostId: session.playerId,
     hostName: session.name,
     maxHumans: rules.maxHumansPerRoom,

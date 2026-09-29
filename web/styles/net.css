@@ -125,6 +125,47 @@ body.rooms-open{overflow:auto;background:var(--bg)}
 .roster-note{font-size:10px;color:var(--muted)}
 .roster-note.warn{color:var(--warn)}
 
+/* ---------- 候场：举手 / 选边 / 踢人 / 中途加入 ---------- */
+.team-picker{display:flex;align-items:center;gap:6px;font-size:10px;color:var(--muted)}
+.team-picker b{font-size:8px;letter-spacing:1.2px;font-weight:600}
+.team-picker button{display:flex;align-items:center;gap:5px;padding:5px 10px;border-radius:8px;
+  background:#1d2b3d;color:var(--muted);border:1px solid var(--line);font-size:10px;font-weight:700;
+  cursor:pointer;font-family:inherit;width:auto}
+.team-picker button.selected{background:#56efd322;color:var(--text);border-color:#56efd377}
+.team-picker button:disabled{opacity:.4;cursor:not-allowed}
+.team-dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.team-dot.blue{background:var(--blue)}
+.team-dot.red{background:var(--danger)}
+.switch-field{display:flex;align-items:center;gap:7px;font-size:10px;color:var(--muted);cursor:pointer}
+.switch-field input{width:14px;height:14px;accent-color:var(--ok);cursor:pointer}
+.switch-field.guest{opacity:.45}
+.switch-field.guest input{cursor:not-allowed}
+.ready-button{padding:9px 18px;border-radius:10px;border:1px solid #56efd377;background:#56efd31f;
+  color:var(--text);font-size:12px;font-weight:800;font-family:inherit;cursor:pointer;width:auto}
+.ready-button.on{background:var(--ok);color:#0d1c1a;border-color:transparent}
+.ready-button:disabled{opacity:.4;cursor:not-allowed;background:#1d2b3d;border-color:var(--line);color:var(--muted)}
+/* 名册卡片：队色、状态、房主手里的"请出去" */
+.roster-chip.t0{border-color:#5aa8ff66}
+.roster-chip.t1{border-color:#ff8da966}
+.roster-chip .chip-side{display:block;font-size:8px;letter-spacing:.7px;color:var(--muted)}
+.roster-chip.waiting small{color:var(--warn)}
+.roster-chip .kick-button{background:transparent;border:1px solid #ff8da955;color:var(--danger);
+  border-radius:7px;font-size:9px;padding:3px 7px;cursor:pointer;font-family:inherit;width:auto}
+.roster-chip .kick-button:hover{background:#ff8da922}
+.start-button.hold{filter:saturate(.45) brightness(.82)}
+.room-card .room-flags{display:flex;gap:7px;flex-wrap:wrap;font-size:9px;color:var(--muted)}
+.room-card .room-flags b{color:var(--text)}
+.room-card .room-flags .flag-closed{color:var(--warn)}
+
+/* 起名弹窗：进房前问一次，之后存在 localStorage 里 */
+.name-modal{width:420px}
+.name-field{display:flex;flex-direction:column;gap:7px;font-size:10px;color:var(--muted);margin:0 0 8px;text-align:left}
+.name-field input{background:#0c1522;border:1px solid var(--line);border-radius:10px;padding:12px;
+  color:var(--text);font-size:16px;font-weight:700;outline:0;font-family:inherit}
+.name-field input:focus{border-color:#56efd388}
+.name-error{margin:0 0 10px;font-size:10px;color:var(--danger);font-weight:700;text-align:left}
+.name-error.hidden{display:none}
+
 @media(max-width:1000px){
   .rooms-layout{grid-template-columns:minmax(0,1fr);gap:16px}
   .rooms-side{flex-direction:row;flex-wrap:wrap}

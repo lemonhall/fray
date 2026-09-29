@@ -15,13 +15,13 @@ import { decodeMap } from "/sim/wire.mjs";
 import { perkById } from "/sim/data.mjs";
 import { S } from "./state.mjs";
 import { openSocket, startPing } from "./net.mjs";
-import { ensureSession, refresh } from "./rooms.mjs";
+import { ensureSession, refresh, notice } from "./rooms.mjs";
 import { pushSnapshot } from "./view.mjs";
 import { initPredict, reconcile, applyBoxUpdates } from "./predict.mjs";
 import { buildGround } from "./render.mjs";
 import { seedFx, consumeEvents } from "./fx.mjs";
 import { play } from "./audio.mjs";
-import { renderRoom } from "./roomui.mjs";
+import { renderRoom, flashRoomNote } from "./roomui.mjs";
 import { showResults, hideResults } from "./results.mjs";
 import { primeMatch, updatePerks } from "./hud.mjs";
 import { selectedHero, prefsOf } from "./showcase.mjs";
@@ -45,7 +45,11 @@ export async function joinRoom(roomId) {
   await ensureSession();
   resetMatchState();
   primed = false;
-  link = openSocket(roomId, { onMessage: onServerMessage, onClose: onSocketClose, onError: () => {} });
+  link = openSocket(roomId, {
+    onMessage: onServerMessage,
+    onClose: info => onSocketClose(info),
+    onError: () => {},
+  });
   stopPing = startPing(link);
   $("roomTitle").textContent = "正在进入房间…";
   setScreen("staging");
@@ -59,9 +63,18 @@ export function leaveRoom(goRooms = true) {
   if (goRooms) { void refresh(); setScreen("rooms"); }
 }
 
-function onSocketClose() {
+/**
+ * 连接断了。两种情形要说两种话：**握手就没成**（房间散了、码打错了、被谢客的房
+ * 拒了）与**进房之后掉线**。混为一谈的话，拿着过期邀请链接来的人只会看到
+ * "与房间的连接已断开"，然后自己猜。
+ */
+function onSocketClose(info = {}) {
   if (S.screen === "rooms") return;
-  $("screenReaderStatus").textContent = "与房间的连接已断开。";
+  if (info.opened === false) {
+    notice("这一间进不去：房间可能已经散了，或者链接里的房间码不对。", true);
+  } else {
+    $("screenReaderStatus").textContent = "与房间的连接已断开。";
+  }
   leaveRoom(true);
 }
 
@@ -103,11 +116,52 @@ function onServerMessage(msg) {
       play(winFrom(msg.results) ? "win" : "lose");
       return;
     case "pong": S.rtt = Math.round(performance.now() - S.lastPingAt); return;
+    // 被房主请出去：这不是"掉线"，得让玩家知道是人的决定，而不是网络的锅。
+    case "kicked":
+      notice("房主把你请出了房间（十分钟内不能重进这一间）。", true);
+      leaveRoom(true);
+      return;
     case "error":
-      $("screenReaderStatus").textContent = `服务端拒绝：${msg.error}`;
-      if (msg.error === "room_full") leaveRoom(true);
+      onServerError(msg);
       return;
     default: return;
+  }
+}
+
+/**
+ * 服务端的拒绝分两种：**还能接着说**的（比如"还有人没举手"），和**必须散场**的
+ * （房间满了、房主关了中途加入、被踢了）。区别在于要不要把人送回大厅。
+ *
+ * "还能接着说"的那几种要**两边都写**：大厅的提示条是给回到大厅之后看的，而人
+ * 此刻还站在候场页上——候场页看不到 `#roomsNote`，写一处等于什么都没说。
+ */
+function onServerError(msg) {
+  const waiting = msg.pending && msg.pending.length ? `（还没举手：${msg.pending.join("、")}）` : "";
+  $("screenReaderStatus").textContent = `服务端拒绝：${msg.error}${waiting}`;
+  if (msg.error === "not_ready") {
+    const names = (msg.pending || []).join("、");
+    notice(`还有人没举手：${names}`, true);
+    flashRoomNote(`还有人没举手：${names}`);
+    return;
+  }
+  if (msg.error === "join_closed") {
+    notice("这间房谢客：房主没允许中途加入。", true);
+    leaveRoom(true);
+    return;
+  }
+  if (msg.error === "kicked") {
+    notice("你被这间房请出去了，十分钟内不能再进。", true);
+    leaveRoom(true);
+    return;
+  }
+  if (msg.error === "room_full") {
+    notice("这间房满员了。", true);
+    leaveRoom(true);
+    return;
+  }
+  if (msg.error === "team_rejected") {
+    notice("那一边已经满了，换一边或者选自动。", true);
+    flashRoomNote("那一边已经满了：换一边，或者点「自动」。");
   }
 }
 

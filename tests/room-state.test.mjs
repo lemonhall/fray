@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import {
   createRoomState, addMember, removeMember, isHost, setBots, setConfig,
   setMemberGadget, startCheck, rosterOf, view, publicView,
+  setTeam, setReady, kickMember, clearReady, KICK_BAN_MS,
 } from "../src/room-state.mjs";
 
 const make = (patch = {}) => createRoomState({
@@ -99,8 +100,71 @@ test("名册把人变成实体，并带上各自选的战术装置", () => {
   assert.equal(setMemberGadget(state, "g_1", "不存在"), false);
   assert.equal(setMemberGadget(state, "g_none", "heal"), false);
   assert.deepEqual(rosterOf(state), [
-    { kind: "human", ownerId: "g_1", name: "A", type: 2, gadget: "shield" },
+    { kind: "human", ownerId: "g_1", name: "A", type: 2, gadget: "shield", team: null },
   ]);
+});
+
+test("选边：只能改自己的队，一边满了就拒绝，房主也不能替别人选", () => {
+  const state = make({ bots: 0 });
+  for (let i = 0; i < 4; i++) addMember(state, { playerId: `g_${i}`, name: `P${i}` });
+  assert.equal(setTeam(state, "g_0", 0), true);
+  assert.equal(setTeam(state, "g_1", 0), true);
+  assert.equal(setTeam(state, "g_2", 0), true);
+  assert.equal(setTeam(state, "g_3", 0), false, "蓝队已经三个人了");
+  assert.equal(setTeam(state, "g_3", 1), true);
+  assert.equal(setTeam(state, "g_3", 9), false, "没有第 10 队");
+  assert.equal(setTeam(state, "g_none", 0), false);
+  assert.equal(setTeam(state, "g_3", null), true);
+  assert.equal(state.members.find(m => m.playerId === "g_3").team, null, "可以退回自动分配");
+
+  setConfig(state, { mode: "survival" });
+  assert.equal(setTeam(state, "g_0", 0), false, "混战没有边可以选");
+  setConfig(state, { mode: "control" });
+  assert.equal(state.members.every(m => m.team === null), true, "换模式会把选边清掉");
+});
+
+test("举手：房主不用举手，非房主没举手就开不了局", () => {
+  const state = make({ bots: 1, hostId: "g_1", hostName: "A" });
+  addMember(state, { playerId: "g_1", name: "A" });
+  addMember(state, { playerId: "g_2", name: "B" });
+  assert.equal(setReady(state, "g_1", true), false, "房主的开打按钮就是他的表态");
+  assert.deepEqual(startCheck(state), { ok: false, error: "not_ready", pending: ["B"] });
+  assert.equal(setReady(state, "g_2", true), true);
+  assert.equal(startCheck(state).ok, true);
+  assert.equal(setReady(state, "g_2", false), true);
+  assert.equal(startCheck(state).error, "not_ready");
+
+  clearReady(state);
+  assert.equal(state.members.every(m => !m.ready), true);
+  assert.equal(view(state, "g_2").you.ready, false);
+});
+
+test("踢人：记一笔禁令，十分钟内不许再进同一间房", () => {
+  const state = make({ bots: 0, hostId: "g_1", hostName: "A" });
+  addMember(state, { playerId: "g_1", name: "A", now: 0 });
+  addMember(state, { playerId: "g_2", name: "B", now: 0 });
+  assert.equal(kickMember(state, "g_2", 1000), true);
+  assert.equal(state.members.length, 1);
+  assert.equal(addMember(state, { playerId: "g_2", name: "B", now: 2000 }).error, "kicked");
+  assert.equal(addMember(state, { playerId: "g_3", name: "C", now: 2000 }).ok, true);
+  assert.equal(kickMember(state, "g_none"), false);
+  assert.equal(
+    addMember(state, { playerId: "g_2", name: "B", now: 1000 + KICK_BAN_MS + 1 }).ok, true,
+    "禁令过期之后可以再进来",
+  );
+});
+
+test("对局中收不收人，看房主的开关", () => {
+  const state = make({ bots: 0, joinLive: false });
+  addMember(state, { playerId: "g_1", name: "A" });
+  state.phase = "live";
+  assert.equal(addMember(state, { playerId: "g_2", name: "B" }).error, "join_closed");
+  assert.equal(addMember(state, { playerId: "g_1", name: "A" }).ok, true, "老成员重连不受影响");
+  setConfig(state, { joinLive: true });
+  assert.equal(addMember(state, { playerId: "g_2", name: "B" }).ok, true);
+  state.phase = "staging";
+  setConfig(state, { joinLive: false });
+  assert.equal(addMember(state, { playerId: "g_3", name: "C" }).ok, true, "候场阶段永远收人");
 });
 
 test("房间视图分成两版：给目录看的概括版、给玩家看的细节版", () => {

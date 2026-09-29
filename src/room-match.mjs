@@ -13,7 +13,7 @@ import { findOpen, spawnPoints } from "../sim/map.mjs";
 import { encodeMap } from "../sim/wire.mjs";
 import { stepWorld } from "../sim/step.mjs";
 import { resetQueue } from "../sim/netcode.mjs";
-import { rosterOf } from "./room-state.mjs";
+import { rosterOf, clearReady } from "./room-state.mjs";
 
 /** 开一局新的：换种子、重铺地图、重排出生点。房主点一次"开始"就走到这里。 */
 export function beginMatch(state, now = Date.now()) {
@@ -35,6 +35,9 @@ export function resetMatch(state, world) {
   state.phase = "staging";
   state.results = null;
   state.startedAt = 0;
+  // 回到候场就得重新举手：上一局开打前的那次 ready 不能顺延到下一局，
+  // 否则房主可以对着"全都没动过"的名册直接再开一局，等于把确认又变成了摆设。
+  clearReady(state);
   if (world) { world.phase = "staging"; world.actors = []; }
 }
 
@@ -47,7 +50,11 @@ export function resetMatch(state, world) {
 export function joinLive(world, member) {
   if (!world || world.phase !== "live") return null;
   if (world.actors.some(a => a.ownerId === member.playerId)) return null;
-  const team = pickTeam(world);
+  // 中途进来的人，自己选的边优先（还是那句话：想和朋友一队是合理的），
+  // 没选过才按场上人数自动补。
+  const chosen = member.team === 0 || member.team === 1 ? member.team : null;
+  const team = chosen !== null && world.mode === "control" ? chosen : pickTeam(world);
+  makeRoom(world, team);
   const index = world.actors.length;
   const [sx, sy] = spawnPoints(world, index, index + 1);
   const p = findOpen(world, sx, sy);
@@ -57,6 +64,38 @@ export function joinLive(world, member) {
   });
   world.actors.push(actor);
   return actor;
+}
+
+/**
+ * 场上满了就先挪走一个机器人：**真人进来占掉机器人名额**——建房的提示里就是这么
+ * 写的，机器人本来就是拿来补位的。不做这一步的话，3v3 会在补位时变成 4v3、4v4，
+ * "最多几个人"这件事就没有一处是准的。
+ *
+ * 挑谁？优先同一队、优先**已经倒下**的那个（少影响一个正在打的）。一个都挑不出
+ * （场上全是真人）就直接算了，宁可超编也不赶真人。
+ */
+function makeRoom(world, team) {
+  const cap = (MODES[world.mode] || MODES.control).maxHumans;
+  if (world.actors.length < cap) return;
+  const bots = world.actors.filter(a => a.kind !== "human");
+  const sameTeam = bots.filter(a => a.team === team);
+  const pool = sameTeam.length ? sameTeam : bots;
+  if (!pool.length) return;
+  const victim = [...pool].sort((a, b) => Number(a.alive) - Number(b.alive))[0];
+  world.actors = world.actors.filter(a => a !== victim);
+}
+
+/**
+ * 把人从场上**彻底拿掉**（踢人用）。
+ *
+ * 和 `dropPlayer`（掉线）刻意分开：掉线的人只是失去输入，角色留在原地挨打，
+ * 回来还能接着用；被踢的人是真被请走了，留着一个不动的角色只会让大家以为他挂机。
+ */
+export function ejectFromWorld(world, playerId) {
+  if (!world) return false;
+  const before = world.actors.length;
+  world.actors = world.actors.filter(a => a.ownerId !== playerId);
+  return world.actors.length !== before;
 }
 
 /**

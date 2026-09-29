@@ -7,8 +7,10 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createRoomState, addMember } from "../src/room-state.mjs";
-import { beginMatch, resetMatch, joinLive, dropPlayer, actorIdOf, advanceWorld, beatGrid } from "../src/room-match.mjs";
+import { createRoomState, addMember, setTeam, setReady } from "../src/room-state.mjs";
+import {
+  beginMatch, resetMatch, joinLive, dropPlayer, actorIdOf, advanceWorld, beatGrid, ejectFromWorld,
+} from "../src/room-match.mjs";
 import { MAX_CATCHUP_TICKS } from "../sim/constants.mjs";
 import { pushCmd } from "../sim/netcode.mjs";
 
@@ -49,6 +51,24 @@ test("对局中有人进来：直接补一个实体，队伍往人少的一边�
   const counts = [0, 0];
   for (const a of world.actors) if (a.kind === "human") counts[a.team]++;
   assert.equal(Math.abs(counts[0] - counts[1]), 1);
+});
+
+test("中途加入的真人占掉机器人的名额，3v3 不会变成 4v3", () => {
+  // 满员开局：2 个真人 + 4 个机器人 = 6 个位置，正好是 3v3。
+  const state = staging(4);
+  const { world } = beginMatch(state);
+  assert.equal(world.actors.length, 6);
+
+  addMember(state, { playerId: "g_3", name: "C", hero: 1 });
+  const member = state.members.find(m => m.playerId === "g_3");
+  const actor = joinLive(world, member);
+  assert.ok(actor, "人进来了");
+  assert.equal(world.actors.length, 6, "总人数不变：机器人让位");
+  assert.equal(world.actors.filter(a => a.kind === "bot").length, 3, "少了一个机器人");
+
+  const counts = [0, 0];
+  for (const a of world.actors) counts[a.team]++;
+  assert.deepEqual(counts, [3, 3], "还是 3v3");
 });
 
 test("掉线只清掉还没消化的输入命令，人不从场上消失", () => {
@@ -177,4 +197,68 @@ test("节拍网格：计时器晚醒不改世界的步伐，长停只丢快照�
   assert.equal(stall.skipped, 18);
   assert.equal(stall.target, nextBcastMs + 900 - ((nextBcastMs + 900 - nextBcastMs) % 50));
   assert.equal(stall.next - stall.target, 50);
+});
+
+test("真人自己选的边说了算；两个人想在同一队就同一队", () => {
+  const state = staging(2);
+  setTeam(state, "g_1", 1);
+  setTeam(state, "g_2", 1);
+  const { world } = beginMatch(state);
+  const humans = world.actors.filter(a => a.kind === "human");
+  assert.equal(humans.length, 2);
+  assert.equal(humans[0].team, 1);
+  assert.equal(humans[1].team, 1, "想和朋友一队是合理的，不再强制拆开");
+});
+
+test("一边选满了，后面的人自动落回人少的那一边", () => {
+  const state = createRoomState({
+    tenant: "neon", roomId: "R2", name: "房", mode: "control", bots: 0,
+    hostId: "g_0", hostName: "H",
+  });
+  for (let i = 0; i < 5; i++) {
+    addMember(state, { playerId: `g_${i}`, name: `P${i}` });
+    if (i < 4) setTeam(state, `g_${i}`, 0);
+  }
+  assert.equal(setTeam(state, "g_4", 0), false, "蓝队已经满了，选不进去");
+  const { world } = beginMatch(state);
+  const counts = [0, 0];
+  for (const a of world.actors) counts[a.team]++;
+  assert.equal(counts[1] >= 1, true, "自动补位会填到另一队去");
+  assert.equal(counts[0] <= 3, true, "蓝队不会超过三个人");
+});
+
+test("对局开打之后就不能再换边了（选边是候场阶段的事）", () => {
+  const state = staging(2);
+  const { world } = beginMatch(state);
+  assert.equal(setTeam(state, "g_1", 1), false, "打起来了还想换边，服务端不认");
+  assert.equal(world.actors.find(a => a.ownerId === "g_1").team, 0, "场上的队形不变");
+});
+
+test("中途进来的人由服务端按人少的一边补位", () => {
+  const state = staging(2);
+  const { world } = beginMatch(state);
+  addMember(state, { playerId: "g_3", name: "C", hero: 1 });
+  const member = state.members.find(m => m.playerId === "g_3");
+  const actor = joinLive(world, member);
+  const counts = [0, 0];
+  for (const a of world.actors) if (a.kind === "human") counts[a.team]++;
+  assert.equal(Math.abs(counts[0] - counts[1]) <= 1, true, "补位总是补到人少的一边");
+  assert.ok(actor.team === 0 || actor.team === 1);
+});
+
+test("踢人要连实体一起清走，而不是留个不动的角色在那挨打", () => {
+  const state = staging(2);
+  const { world } = beginMatch(state);
+  assert.equal(ejectFromWorld(world, "g_1"), true);
+  assert.equal(world.actors.some(a => a.ownerId === "g_1"), false, "被踢的人不留尸体");
+  assert.equal(ejectFromWorld(world, "g_none"), false);
+});
+
+test("重开一局要重新举手，上一局的 ready 不顺延", () => {
+  const state = staging(2);
+  setReady(state, "g_2", true);
+  const { world } = beginMatch(state);
+  resetMatch(state, world);
+  assert.equal(state.phase, "staging");
+  assert.equal(state.members.every(m => !m.ready), true);
 });
