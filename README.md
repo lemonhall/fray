@@ -19,6 +19,10 @@
 
 ![房间浏览器](docs/shots/00-rooms-list.png)
 
+> 下面这些图是**线上生产环境**的实拍（Playwright 真的打开 Vercel 上那个站点，
+> 走一遍开房 → 加入 → 放机器人 → 开打），来源与拍法见
+> [`docs/shots/README.md`](docs/shots/README.md)。
+
 | 候场：名册 + 房主控制 | 竞技场：人机混战 |
 |---|---|
 | ![候场](docs/shots/02-lobby.png) | ![混战](docs/shots/05-brawl.png) |
