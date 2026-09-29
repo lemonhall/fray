@@ -22,6 +22,10 @@ export const S = {
   seed: 0,
   snaps: [],                    // 快照环形缓冲，渲染与插值都从这里取
   serverTime: 0,
+  wall: 0,                      // 最新快照的**墙上时间**（毫秒）；插值的唯一时钟
+  lastTm: 0,
+  headTm: 0,                    // 渲染头此刻所在的世界时间（秒），逐帧匀速推进
+  headAt: 0,
   results: null,
   connected: false,
 

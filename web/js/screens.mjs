@@ -43,6 +43,9 @@ export function setScreen(screen) {
 /** 每一局开局前都要把上一局的残留清干净，否则新地图上会飘着旧局的粒子。 */
 export function resetMatchState() {
   S.snaps = []; S.map = null; S.ground = null; S.predictW = null; S.predictMe = null;
+  // 插值时间线必须跟着清：留着上一局的锚点，新一局的第一个快照会被当成"落后半秒"
+  // 而触发一次瞬移，开打瞬间画面就会跳一下。
+  S.wall = 0; S.lastTm = 0; S.headTm = 0; S.headAt = 0;
   S.me = null; S.actorId = 0; S.meTeam = 0; S.results = null; S.shake = 0; S.hitUntil = 0;
   FX.particles = []; FX.floaters = []; FX.rings = []; FX.beams = []; FX.feed = []; FX.announce = null;
   hideUpgrade();
