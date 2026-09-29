@@ -15,7 +15,7 @@ import { decodeMap } from "/sim/wire.mjs";
 import { perkById } from "/sim/data.mjs";
 import { S } from "./state.mjs";
 import { openSocket, startPing } from "./net.mjs";
-import { connect, refresh } from "./rooms.mjs";
+import { ensureSession, refresh } from "./rooms.mjs";
 import { pushSnapshot } from "./view.mjs";
 import { initPredict, reconcile, applyBoxUpdates } from "./predict.mjs";
 import { buildGround } from "./render.mjs";
@@ -40,7 +40,9 @@ export const linkState = () => link;
 
 export async function joinRoom(roomId) {
   leaveRoom(false);
-  if (!S.token) await connect();
+  // 等身份落定再连：建房用的令牌和这条 socket 用的必须是**同一张**，
+  // 否则服务端认不出"我是房主"（跨境链路上这曾经是个必现的 bug）。
+  await ensureSession();
   resetMatchState();
   primed = false;
   link = openSocket(roomId, { onMessage: onServerMessage, onClose: onSocketClose, onError: () => {} });

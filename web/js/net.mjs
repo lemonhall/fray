@@ -22,14 +22,12 @@ async function call(method, path, { body, token } = {}) {
 
 export const tenantPath = suffix => `/v1/${encodeURIComponent(TENANT)}${suffix}`;
 
-export async function guestSession(name) {
-  const data = await call("POST", tenantPath("/guest"), { body: { name } });
-  S.token = data.token;
-  S.meId = data.playerId;
-  S.playerName = data.name;
-  S.tenant = data.tenant;
-  return data;
-}
+/**
+ * 签一张游客令牌。**故意不往 `S` 里写**：什么时候把这张令牌当成"我"，
+ * 是身份闸门（`identity.mjs`）的判断，不是网络层的副作用。写在这里的话，
+ * 一张过期令牌也会覆盖掉新的那张。
+ */
+export const guestSession = name => call("POST", tenantPath("/guest"), { body: { name } });
 
 export const listRooms = () => call("GET", tenantPath("/rooms"));
 export const leaderboard = limit => call("GET", tenantPath(`/leaderboard?limit=${limit}`));

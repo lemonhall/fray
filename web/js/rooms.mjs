@@ -10,6 +10,7 @@
 
 import { TENANT, apiUrl } from "./config.mjs";
 import { guestSession, listRooms, leaderboard, createRoom, quickMatch } from "./net.mjs";
+import { createIdentityGate } from "./identity.mjs";
 import { MODES } from "/sim/data.mjs";
 import { S } from "./state.mjs";
 
@@ -19,6 +20,7 @@ const NAME_KEY = "fray.name";
 let onJoin = () => {};
 let timer = null;
 let busy = false;
+let nickTimer = null;
 
 const readName = () => { try { return localStorage.getItem(NAME_KEY) || ""; } catch { return ""; } };
 const writeName = value => { try { localStorage.setItem(NAME_KEY, value); } catch { /* 隐私模式 */ } };
@@ -46,8 +48,10 @@ export async function refresh() {
   if (busy) return;
   busy = true;
   try {
+    // 排行榜和最近战绩是**锦上添花**：它们挂了不该把"大厅连不上"这种话说给玩家听。
+    // 真正必须成功的是房间列表——那才是能不能开一局的前提。
     const [rooms, board, matches] = await Promise.all([
-      listRooms(), leaderboard(8).catch(() => ({ rows: [] })), recentMatches(),
+      listRooms(), leaderboard(8).catch(() => ({ rows: [] })), recentMatches().catch(() => []),
     ]);
     renderRooms(rooms.rooms || []);
     renderBoard(board.rows || []);
@@ -145,6 +149,7 @@ function readCreateForm() {
 async function doCreate() {
   setNote("正在建房…");
   try {
+    await ensureSession();
     const created = await createRoom(readCreateForm());
     $("createPanel").classList.add("hidden");
     onJoin(created.roomId);
@@ -156,6 +161,7 @@ async function doCreate() {
 async function doQuickMatch() {
   setNote("正在寻找房间…");
   try {
+    await ensureSession();
     const found = await quickMatch({ mode: $("createMode").value, difficulty: 1, bots: 4 });
     onJoin(found.roomId);
   } catch (error) {
@@ -163,17 +169,36 @@ async function doQuickMatch() {
   }
 }
 
-/** 进站时的第一次握手：拿一张游客令牌，顺带把房间列表拉出来。 */
+/** 令牌落定之后，"我"是谁的**唯一**写入点。 */
+const identity = createIdentityGate(data => {
+  S.token = data.token;
+  S.meId = data.playerId;
+  S.playerName = data.name;
+  S.tenant = data.tenant;
+});
+
+/**
+ * 进站握手：拿一张游客令牌（名字只在真的变了才重签），顺带把房间列表拉出来。
+ */
 export async function connect() {
   const name = nickname();
-  S.playerName = name;
   try {
-    await guestSession(name);
+    if (!identity.has() || name !== S.playerName) await identity.sign(name, guestSession);
     await refresh();
   } catch (error) {
     setStatus("身份获取失败", "off");
     setNote(`后端的租户 "${TENANT}" 还没注册，或者地址不对：${error.message}`, true);
   }
+}
+
+/**
+ * 建房 / 快速匹配 / 进房之前的统一入口：**等身份落定**再动。
+ * 少了这一步，就会出现"用旧令牌建房、用新令牌连 socket"这种错位——
+ * 表现出来就是房主忽然没有房主权限。
+ */
+export async function ensureSession() {
+  if (!(await identity.ensure(connect))) throw new Error("no_session");
+  return S.token;
 }
 
 export function startAutoRefresh() {
@@ -193,7 +218,10 @@ export function initRooms(hooks) {
   $("nickInput").value = readName() || "";
   $("nickInput").addEventListener("change", () => {
     writeName($("nickInput").value.trim());
-    void connect();
+    // 改名要换令牌（名字在令牌里），但别每次击键都签一张：抖动 400ms 合并掉，
+    // 而且**只在大厅里**重签——对局中重签等于把"我"换成另一个人。
+    clearTimeout(nickTimer);
+    nickTimer = setTimeout(() => { if (S.screen === "rooms") void connect(); }, 400);
   });
   $("refreshRooms").addEventListener("click", () => void refresh());
   $("openCreateButton").addEventListener("click", () => $("createPanel").classList.toggle("hidden"));
