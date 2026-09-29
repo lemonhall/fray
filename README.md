@@ -170,6 +170,11 @@ vercel link --yes --project fray                # 首次：把仓库绑到一个
 vercel --prod                                   # 之后每次部署都是一条命令
 ```
 
+> 本地同时跑着 `wrangler dev` 时，`.wrangler/` 是独占锁定的，Vercel CLI 上传前
+> 会把它读一遍，于是整条部署以 `EBUSY: resource busy or locked, read` 失败
+> （而且不告诉你是哪个文件）。仓库里的 [`.vercelignore`](.vercelignore) 已经把它
+> 挡在外面了，顺手也挡住了不该外传的 `.dev.vars`。
+
 这里不需要手工设 `FRAY_API`：它写在 [`vercel.json`](vercel.json) 的 `build.env` 里，
 Vercel 云端跑 `npm run build` 时会自动注入，**GitHub 推一下就会重建生产环境**——
 所以这个仓库的推送即部署，前端不会和后端漂移。

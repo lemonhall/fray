@@ -1,0 +1,10 @@
+# 本地状态、密钥与依赖：都不该跟着部署走。
+#
+# 这份文件不是可有可无的：`.wrangler/` 在 `wrangler dev` 跑着的时候是**独占锁定**的，
+# 而 Vercel CLI 上传前会把整个项目目录读一遍——扫到它就整条部署以
+# `EBUSY: resource busy or locked, read` 失败，且不告诉你是哪个文件。
+# `.dev.vars` 里可能放着 SECRET，更不该被上传，哪怕只是上传到构建机。
+.wrangler/
+.dev.vars
+.artifacts/
+node_modules/
