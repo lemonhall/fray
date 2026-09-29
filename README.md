@@ -103,7 +103,7 @@ curl.exe -X POST http://127.0.0.1:8790/v1/tenants -H "authorization: Bearer $env
 ## 测试
 
 ```powershell
-npm test                        # 50 个单元测试：内核、名册、权限、线格式、路由、DOM 契约、身份、手感
+npm test                        # 57 个单元测试：内核、名册、权限、线格式、路由、DOM 契约、身份、手感、节奏
 npm run e2e                     # 双客户端联调（需要本机 Chrome + Playwright）
 npm run smoke                   # 纯服务端冒烟：HTTP + WebSocket 走完一局，不需要浏览器
 ```
@@ -125,6 +125,10 @@ npm run smoke                   # 纯服务端冒烟：HTTP + WebSocket 走完�
   本机画面有没有往后退、有没有偏离"从出生点重放全部命令"那条理想轨迹。同一段
   输入还会跑一个**对照组**，把对账规则换回旧版；对照组每次都被拽回几十上百像素，
   证明这条测试真的看得见那个 bug，而不是恰好断言在一个死数字上。
+* **节奏（画面不一顿一顿）**：`tests/room-ticker.test.mjs` 钉住"世界按 50ms 网格
+  推进"——计时器晚醒也不改步伐、没到点就什么都不做、DO 被冻住时只丢快照而不丢
+  世界时间；`tests/room-match.test.mjs` 钉住推进的零头不丢；`tests/wire.test.mjs`
+  钉住快照的世界时间带毫秒精度（只有 100ms 精度的话，插值会每 100ms 顿一下）。
 
 `npm run e2e` 更有意思：它真的开两个 Chrome，一个开房一个加入，走完
 **开房 → 列表里看到 → 点进去 → 房主加机器人 → 开打 → 两边进场 → 移动 → 对射**，
@@ -199,6 +203,8 @@ web/        静态站点：index.html + 原版皮肤 game.css + 联机层 net.cs
 tools/      build（复制内核+注入地址）/ extract-original（一次性抽取原版皮肤）/ rebrand
             smoke（纯服务端冒烟，无浏览器）/ e2e-local（双 Chrome 联调）
             latency-proxy（TCP 延迟注入）/ netcode-probe（手感探针，挂延迟代理跑）
+            pacing-probe（节奏探针，纯 Node）/ pacing-browser（节奏探针，真浏览器）
+            pacing-stats（上面两个探针共用的重放与统计）
 tests/      node:test —— 内核、名册、权限、线格式、路由、DOM 契约、身份、手感
 docs/       architecture.md（架构与时序）、protocol.md（线协议）、shots/（截图）
 ```
@@ -222,6 +228,10 @@ docs/       architecture.md（架构与时序）、protocol.md（线协议）、
 * **跨境链路上移动不"被拽回"**：本地预测 + 命令时间线对账，100ms 单向延迟 +
   30ms 抖动 + 1.2 秒拥塞窗口实测，最大单帧回退从 288px 降到 0.1px（详见
   `docs/architecture.md` 的"为什么移动不会被拽回去"）。
+* **跨境链路上画面不一顿一顿**：世界按 50ms 网格推进（线上实测相邻快照的世界时间
+  差恒为 50ms）+ 带死区的对称渲染头。把线上真浏览器采到的快照喂给重放器：每帧
+  位移的变异系数从 2.251 降到 0.079，冻住帧占比从 83.4% 降到 0.6%（详见
+  `docs/architecture.md` 的"为什么画面不会一顿一顿"）。
 
 已知取舍 / 下一步：
 
