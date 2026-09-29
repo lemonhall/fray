@@ -57,6 +57,24 @@ test("快照能过 JSON，并且我自己的实体带上了只属于我的字段
   assert.ok(Array.isArray(parsed.b) && Array.isArray(parsed.gr) && parsed.z && parsed.rg);
 });
 
+/**
+ * 快照的 `tm` 必须带**毫秒精度**，不能只到 100ms。
+ *
+ * 客户端拿相邻两帧的 `tm` 做插值，快照又每 50ms 来一张。`tm` 一粗糙，"两张快照
+ * 的 tm 相同"和"两张差 100ms"就会轮流出现：插值规则跳过前一对、又从后一对一次性
+ * 补回来，画面上就是每 100ms 顿一下（"机器人像幻灯片"）。这条测试钉的就是这个。
+ */
+test("快照的世界时间带毫秒精度，够插值用", () => {
+  const w = world();
+  w.time = 6.9;      // 一位小数：老实现里 6.94 和 6.9 会变成同一个数
+  const a = encodeSnapshot(w, 0).tm;
+  w.time = 6.94;
+  const b = encodeSnapshot(w, 0).tm;
+  assert.notEqual(a, b, "两帧相差 40ms 就必须能从 tm 上看出来");
+  assert.equal(a, 6.9);
+  assert.equal(b, 6.94);
+});
+
 test("躲在草丛里的敌人根本不会出现在我的快照里，点亮之后才出现", () => {
   const w = world();
   const me = w.actors.find(a => a.kind === "human");

@@ -44,8 +44,18 @@ export function decodeMap(msg) {
 /**
  * 一帧快照。`selfId` 是接收者的角色 id：可见性过滤以**他**的视角为准，
  * 所以草丛里藏着的敌人根本不会出现在他的报文里。
+ *
+ * `tm` 是**世界模拟时间（秒）**，客户端在相邻两帧之间用它插值。它必须带
+ * **毫秒精度**（`r3`，不是 `r1`）：`r1` 会把 6.94 秒记成 6.9，而快照每 50ms
+ * 来一张。于是"两张快照的 tm 完全相同"和"两张差 100ms"会轮流出现——插值规则
+ * 跳过前一对、又从后一对里一次性补回来，画面上就是**每 100ms 顿一下**，
+ * 也就是"机器人像幻灯片"。1ms 的精度对 16.67ms 的模拟格足够了。
+ *
+ * `sentAt`（`wt`）是发送时刻的墙上时间（毫秒），只留给探针与诊断用：
+ * 渲染头的时钟是客户端的 `performance.now`，不是这个字段。
+ * 详情见 `docs/architecture.md` 的"为什么画面不会一顿一顿"。
  */
-export function encodeSnapshot(w, selfId) {
+export function encodeSnapshot(w, selfId, sentAt = 0) {
   const self = w.actors.find(a => a.id === selfId) || null;
   const actors = [];
   for (const a of w.actors) {
@@ -59,7 +69,8 @@ export function encodeSnapshot(w, selfId) {
     t: "s",
     tk: w.tick,
     ph: w.phase,
-    tm: r1(w.time),
+    tm: r3(w.time),
+    wt: sentAt,
     sc: [Math.floor(w.score[0]), Math.floor(w.score[1])],
     z: { x: r1(w.zone.x), y: r1(w.zone.y), r: w.zone.r, ow: w.zone.owner, ct: w.zone.contested ? 1 : 0 },
     rg: { x: r1(w.ring.x), y: r1(w.ring.y), r: w.ring.r },

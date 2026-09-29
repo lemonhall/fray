@@ -8,7 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createRoomState, addMember } from "../src/room-state.mjs";
-import { beginMatch, resetMatch, joinLive, dropPlayer, actorIdOf, advanceWorld } from "../src/room-match.mjs";
+import { beginMatch, resetMatch, joinLive, dropPlayer, actorIdOf, advanceWorld, beatGrid } from "../src/room-match.mjs";
 import { MAX_CATCHUP_TICKS } from "../sim/constants.mjs";
 import { pushCmd } from "../sim/netcode.mjs";
 
@@ -70,9 +70,11 @@ test("补算：跨境链路上常见的一秒级断流不该再丢时间", () =>
   const { world } = beginMatch(state);
   const step = 1000 / 60;
   // 1.5 秒没有任何消息到达（现实里就是一次 TCP 重传或者一次拥塞窗口）。
-  const base = advanceWorld(world, 1_000_000, 1_000_000 + step * 90 + .5, MAX_CATCHUP_TICKS);
+  const now = 1_000_000 + step * 90 + .5;
+  assert.equal(advanceWorld(world, 1_000_000, now, MAX_CATCHUP_TICKS), now);
   assert.equal(world.tick, 90, "90 步全补上，一格不丢");
-  assert.equal(base, 1_000_000 + step * 90);
+  // 那半毫秒的零头没被扔掉，它记账在 stepCarry 里，下一次补算会补上。
+  assert.ok(world.stepCarry > 0 && world.stepCarry < step, "不足一格的零头记账，不丢时间");
 });
 
 test("重开一局：回到候场，场上清空", () => {
@@ -85,21 +87,94 @@ test("重开一局：回到候场，场上清空", () => {
   assert.equal(world.actors.length, 0);
 });
 
-test("补算：按墙上时间推进，但超预算时丢掉积压而不是滚雪球", () => {
+test("补算：超预算时削掉这一次的欠账，绝不让世界滚雪球", () => {
   const state = staging(4);
   const { world } = beginMatch(state);
   const step = 1000 / 60;
   let base = 1_000_000;
-  // 多给半毫秒：`floor` 遇上二进制浮点会把"刚好 10 步"算成 9.999…，这是测试的坑，
-  // 不是被测量的行为有问题——所以这里按真实的时钟抖动来喂它。
-  base = advanceWorld(world, base, base + step * 10 + .5, 30);
+  // 喂给它一个"差半毫秒不到整格"的时刻——真实时钟就是这样抖的。
+  // 推进的记账基准是墙上时间，所以返回值就是喂进去的那个时刻本身。
+  const early = base + step * 10 + .5;
+  assert.equal(advanceWorld(world, base, early, 30), early);
+  base = early;
   assert.equal(world.tick, 10);
-  assert.equal(base, 1_000_000 + step * 10);
 
   const before = world.tick;
   const now = base + step * 5000;
   const next = advanceWorld(world, base, now, 30);
   assert.equal(world.tick - before, 30, "最多补 30 步");
-  assert.equal(next, now, "超预算就对齐到现在，不留下时间债");
+  assert.equal(next, now, "推进的记账基准永远是墙上时间");
   assert.equal(advanceWorld(world, next, next), next, "时间没走就不推进");
+});
+
+/**
+ * "幻灯片"那个 bug 的出生地就在这条测试里。
+ *
+ * 世界是**按消息到达驱动**的，消息的间隔永远不会正好是 16.67ms。老实现每次只走
+ * `floor(经过时间 / 16.67)` 步、把零头扔掉，于是世界的平均速度比真实时间慢一大截；
+ * 客户端的渲染头按真实时间走，就会一会儿追过数据（只能冻住等）、一会儿被新快照
+ * 拽回去——画面上就是幻灯片。
+ *
+ * 所以这里喂一串**故意恶心**的间隔（不整除、还带抖动），要求世界的累计时间必须
+ * 跟上墙上时间；同时要求任何一次补算都守得住 `maxTicks`，不会把 CPU 打满。
+ */
+test("补算：把不整格的零头记账，世界的平均速度和墙上时间一致", () => {
+  const state = staging(0);
+  const { world } = beginMatch(state);
+  const step = 1000 / 60;
+  let now = 5_000_000;
+  const start = now;
+  // 25Hz 上行的真实形状：间隔 37~43ms，还夹两次 300ms 的卡顿。
+  const gaps = [41, 39, 40, 300, 37, 43, 38, 42, 300, 40];
+  for (let round = 0; round < 12; round++) {
+    for (const gap of gaps) {
+      now += gap;
+      advanceWorld(world, now - gap, now, MAX_CATCHUP_TICKS);
+    }
+  }
+  const wallSeconds = (now - start) / 1000;
+  // 记账天然是离散的：世界时间最多落后一格（攒在 stepCarry 里的零头），
+  // 但绝不允许"慢了百分之十几"这种系统性丢失——那正是幻灯片感的来源。
+  const lagMs = (wallSeconds - world.time) * 1000;
+  assert.ok(lagMs >= -0.01 && lagMs < step * 1.5,
+    `世界时间 ${world.time.toFixed(3)}s 比墙上时间 ${wallSeconds.toFixed(3)}s 慢了 ${lagMs.toFixed(1)}ms`);
+});
+
+/**
+ * 节拍网格（`beatGrid`）——第二把"幻灯片"的钥匙。
+ *
+ * 世界推进的时刻必须取**网格上该到的时刻**，不能取计时器实际醒来的时刻。workerd 的
+ * `setTimeout(50)` 实测平均 62ms 才醒；拿实际时刻推进，世界就比广播快 1.2 倍，客户端
+ * 的插值头只能一路追赶。这里把那段算术钉死：不管计时器晚多少，世界都按 50ms 的整数格
+ * 走，而且**永远不会被排在"未来"**（那会让世界跑到墙上时间前面去）。
+ */
+test("节拍网格：计时器晚醒不改世界的步伐，长停只丢快照不丢时间", () => {
+  const first = beatGrid({ now: 1_000_000, nextBcastMs: 0 });
+  assert.deepEqual(first, { target: 1_000_000, next: 1_000_050, skipped: 0, started: true });
+  assert.equal(beatGrid({ now: 1_000_020, nextBcastMs: first.next }), null, "没到点就该什么都不做");
+
+  // 计时器晚了 12ms 才醒：世界仍然只推进到网格上的那一格。
+  const late = beatGrid({ now: 1_000_062, nextBcastMs: first.next });
+  assert.equal(late.target, 1_000_050);
+  assert.equal(late.next, 1_000_100);
+  assert.equal(late.skipped, 0);
+
+  // 连续 20 拍都晚 12ms 醒：世界的时刻永远落在网格上（原点 + N×50ms），
+  // 永远不超前于墙上时间，而且最多只落后一格——攒够一格就把整格跳过去（skipped）。
+  let nextBcastMs = first.next, now = 1_000_000;
+  for (let i = 0; i < 20; i++) {
+    now += 62;
+    const grid = beatGrid({ now, nextBcastMs });
+    nextBcastMs = grid.next;
+    assert.equal((grid.target - first.target) % 50, 0, "世界时刻永远落在 50ms 的网格上");
+    assert.ok(grid.target <= now, "世界永远不推进到未来");
+    assert.ok(now - grid.target < 50, "最多落后一格：攒够了就跳过去，不欠账");
+  }
+  assert.equal(now - nextBcastMs < 50, true, "网格自己不能漂");
+
+  // DO 被冻了 900ms：一次补上时间，但只发一张快照（skipped 记下跳过了几格）。
+  const stall = beatGrid({ now: nextBcastMs + 900, nextBcastMs });
+  assert.equal(stall.skipped, 18);
+  assert.equal(stall.target, nextBcastMs + 900 - ((nextBcastMs + 900 - nextBcastMs) % 50));
+  assert.equal(stall.next - stall.target, 50);
 });

@@ -22,6 +22,9 @@ export function createWorld({ tenant, roomId, mode = "control", difficulty = 1, 
     seed: seed >>> 0, matchSeed: seed >>> 0,
     phase: "staging",
     time: 0, tick: 0, nextEntity: 1,
+    // 补算的零头记账（见 `src/room-match.mjs` 的 `advanceWorld`）：不足一格的时间
+    // 攒在这里，够一格就走一步。丢了它就等于让世界比真实时间走得慢。
+    stepCarry: 0,
     actors: [], bullets: [], cubes: [], grenades: [], fields: [], supplies: [], scheduled: [],
     events: [],
     grid: [], walls: [], bushes: [], boxes: [],
@@ -45,6 +48,7 @@ export function startMatch(w, roster, seed) {
   w.seed = (seed >>> 0) || w.seed;
   w.matchSeed = w.seed;
   w.time = 0; w.tick = 0; w.phase = "live";
+  w.stepCarry = 0;
   w.bullets = []; w.cubes = []; w.grenades = []; w.fields = []; w.supplies = []; w.scheduled = [];
   w.events = []; w.score = [0, 0]; w.results = null; w.endedAt = 0; w.endReason = "";
   w.zone = { x: WORLD / 2, y: WORLD / 2, r: 158, owner: -1, contested: false };

@@ -90,21 +90,59 @@ function randomSeed() {
   return buf[0] || 1;
 }
 
-/** 快进：从一个 tick 推到目标 tick，带补算上限，防止长时间挂起后把 CPU 打满。 */
+/**
+ * 快进：把世界推进到"现在"。
+ *
+ * **这个函数保证世界的平均推进速度和墙上时钟一致**，这一点是画面平滑的根。原来
+ * 它每次只算 `floor(经过时间 / 16.67ms)` 步，剩下那不足一格的零头**直接扔掉**：
+ * 消息每 40ms 来一条时，每次丢 0~16ms，平均世界时间比真实时间慢百分之十几。
+ * 客户端按真实时间插值，于是它的"渲染头"一会儿追过服务端的数据（只能冻住等），
+ * 一会儿又被新的快照拽回去——眼睛看到的就是**幻灯片**。
+ *
+ * 修法是把零头**记账**：累积到 `world.stepCarry`，够一格就走一步。这样世界既不
+ * 丢时间（不会比真时间慢），也不会滚雪球（不会一次补出几百步）。
+ * `maxTicks` 仍然保留，只用来防止一次长时间的挂起把 CPU 打满。
+ */
 export function advanceWorld(world, lastTickMs, now, maxTicks) {
   if (!world || world.phase !== "live") return lastTickMs;
   const stepMs = 1000 / 60;
-  let steps = Math.floor((now - lastTickMs) / stepMs);
-  if (steps <= 0) return lastTickMs;
-  // 超预算就丢掉积压的时间（世界比墙上时钟走得慢一点），而不是把债务滚雪球，
-  // 否则一次长时间的挂起会让后续每一帧都在补算，CPU 永远降不下来。
-  let base = lastTickMs + steps * stepMs;
-  if (steps > maxTicks) { steps = maxTicks; base = now; }
+  const elapsed = now - lastTickMs;
+  if (elapsed <= 0) return lastTickMs;
+  const total = (world.stepCarry || 0) + elapsed;
+  let steps = Math.floor(total / stepMs);
+  if (steps <= 0) { world.stepCarry = total; return now; }
+  // 超预算只削掉**这一步**要补的量，剩下的零头照记——削掉的是"这一次的欠账"，
+  // 而不是"世界该有的时间"。两者混为一谈就会重新开始丢时间。
+  const extra = Math.max(0, steps - maxTicks);
+  steps = Math.min(steps, maxTicks);
+  world.stepCarry = total - (steps + extra) * stepMs;
   for (let i = 0; i < steps; i++) {
     if (world.phase !== "live") break;
     stepWorld(world, DT);
   }
-  return base;
+  return now;
 }
 
 export const modeOf = m => MODES[m] || MODES.control;
+
+/**
+ * 节拍网格的**纯算术部分**：该不该在这一刻发牌，世界要推进到哪一刻，下一拍排在哪。
+ *
+ * 抽出来单独一个函数有两个理由：`room.mjs` 那个 Durable Object 在 Node 里根本起不来
+ * （`cloudflare:workers` 不存在），而这里恰恰是最容易写错、最值得钉死的一段算术；
+ * 而且"网格"这个概念本身跟 WebSocket、跟 DO 都没关系，它只是"时间怎么对齐"。
+ *
+ * 约定：
+ *   - 未开始（`nextBcastMs` 为 0）→ 以 `now` 为原点，返回第一拍的时刻；
+ *   - 没到点 → 返回 `null`，调用方什么都不做；
+ *   - 到点（包括晚到）→ `target` 是**网格上应该到的时刻**（永远 ≤ `now`），世界推到
+ *     那里为止；`skipped` 是中间被跳掉的格子数（DO 被冻了一会儿）。跳过的格子只丢
+ *     快照、**不丢世界时间**，否则世界会比墙上时钟永久落后。
+ */
+export function beatGrid({ now, nextBcastMs, broadcastMs = 50 }) {
+  if (!nextBcastMs) return { target: now, next: now + broadcastMs, skipped: 0, started: true };
+  if (now < nextBcastMs) return null;
+  const skipped = Math.floor((now - nextBcastMs) / broadcastMs);
+  const target = nextBcastMs + skipped * broadcastMs;
+  return { target, next: target + broadcastMs, skipped, started: false };
+}

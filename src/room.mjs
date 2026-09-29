@@ -11,7 +11,7 @@
  */
 
 import { DurableObject } from "cloudflare:workers";
-import { MAX_CATCHUP_TICKS, TICK_HZ } from "../sim/constants.mjs";
+import { TICK_HZ } from "../sim/constants.mjs";
 import { MAX_CMD_TICKS, pushCmd } from "../sim/netcode.mjs";
 import { decodeMove } from "../sim/input.mjs";
 import { encodeSnapshot } from "../sim/wire.mjs";
@@ -20,9 +20,10 @@ import { verifyToken } from "./auth.mjs";
 import {
   createRoomState, isHost, view as roomView, publicView, startCheck,
 } from "./room-state.mjs";
-import { beginMatch, resetMatch, actorIdOf, advanceWorld } from "./room-match.mjs";
+import { beginMatch, resetMatch, actorIdOf } from "./room-match.mjs";
+import { MatchTicker } from "./room-ticker.mjs";
 import { attach, detach, onMessage, broadcastRoom, broadcast, sendTo } from "./room-conns.mjs";
-import { ALARM_MS, BROADCAST_MS } from "./room-consts.mjs";
+import { ALARM_MS } from "./room-consts.mjs";
 import { recordMatch } from "./results.mjs";
 
 export class Room extends DurableObject {
@@ -32,9 +33,14 @@ export class Room extends DurableObject {
     this.state = null;
     this.world = null;
     this.mapMsg = null;
-    this.lastTickMs = 0;
     this.lastBroadcastMs = 0;
     this.reported = false;
+    // 时钟在节拍器里（`room-ticker.mjs`）：网格、世界推进、结束回调都归它。
+    this.ticker = new MatchTicker({
+      onFrame: now => this.broadcastSnapshot(now),
+      onEnd: () => this.finish(),
+      log: env.TICK_LOG ? entry => console.log(JSON.stringify(entry)) : null,
+    });
     ctx.blockConcurrencyWhile(async () => {
       this.state = (await ctx.storage.get("room")) || null;
     });
@@ -93,9 +99,9 @@ export class Room extends DurableObject {
     const { world, mapMsg } = beginMatch(this.state);
     this.world = world;
     this.mapMsg = mapMsg;
-    this.lastTickMs = Date.now();
     this.lastBroadcastMs = 0;
     this.reported = false;
+    this.ticker.start(world);
     this.broadcast({ t: "begin", room: roomView(this.state, null) });
     this.broadcast(mapMsg);
     // 开局立刻推第一帧快照。这一步不能省：客户端要先在自己的快照里找到"我"这个
@@ -145,18 +151,46 @@ export class Room extends DurableObject {
       r: Number.isFinite(msg.r) ? Math.max(55, Math.min(380, msg.r)) : 310,
       n,
     }, now);
-    // 不强制广播：50ms 的节流窗口负责节奏，否则 6 个人各自 25Hz 上行就是
-    // 每秒 150 次全员广播，白白把 CPU 和带宽烧掉。
+    // 不强制广播：节奏归 50ms 的网格，否则 6 个人各自 25Hz 上行就是每秒 150 次全员
+    // 广播，白白把 CPU 和带宽烧掉。**节拍器负责节奏，消息负责兜底**——`beat()` 自己
+    // 会看网格，没到点就什么都不做，所以谁先来都无所谓；而只要还有人上行，世界就不会
+    // 因为某个定时器不打火而整段停摆。
     this.tick(false);
   }
 
-  /** 唯一的推进点。补算到"现在"，然后按节流窗口决定是否广播。 */
+  /**
+   * 消息到达时的即时响应：**踩一拍**（没到网格上的点就什么都不做）。
+   *
+   * 这条兜底很值钱——定时器被节流、DO 被冻结之后，只要还有人上行，世界就会接着走。
+   * 网格让"谁先到"变得无所谓：世界永远只推进到网格时刻，快照永远等距。
+   */
   tick(force) {
+    if (force) {
+      return this.beat(true);
+    }
+    if (!this.world || this.world.phase !== "live") return;
+    if (this.env.TICK_LOG) {
+      const now = Date.now();
+      const gap = now - (this.lastInMs || now);
+      if (gap > 150) console.log(JSON.stringify({ t: "in-gap", gap }));
+      this.lastInMs = now;
+    }
+    this.ticker.beat();
+    this.ticker.keepAlive();
+  }
+
+  /**
+   * 踩一拍：世界推进到网格上该到的时刻，广播一张快照。真正的时钟在
+   * `room-ticker.mjs`，这里只是把"世界的推进"接上"广播"。
+   *
+   * `force` 是开局那一帧专用的：立刻补算 + 立刻广播 + 把网格原点挪到当下。
+   */
+  beat(force = false) {
     const now = Date.now();
     if (!this.world || this.world.phase !== "live") return;
-    this.lastTickMs = advanceWorld(this.world, this.lastTickMs, now, MAX_CATCHUP_TICKS);
-    if (this.world.phase !== "live") return this.finish();
-    if (force || now - this.lastBroadcastMs >= BROADCAST_MS) this.broadcastSnapshot(now);
+    if (force) return void this.ticker.flush(this.world, now);
+    this.ticker.beat(now);
+    this.ticker.keepAlive();
   }
 
   broadcastSnapshot(now) {
@@ -164,7 +198,7 @@ export class Room extends DurableObject {
     for (const [ws, conn] of this.conns) {
       if (ws.readyState !== 1) continue;
       const selfId = actorIdOf(this.world, conn.playerId);
-      this.sendTo(ws, encodeSnapshot(this.world, selfId));
+      this.sendTo(ws, encodeSnapshot(this.world, selfId, now));
     }
     this.world.events = [];
   }
@@ -219,6 +253,7 @@ export class Room extends DurableObject {
       this.state.phase = "staging";
       this.state.members = [];
       this.world = null;
+      this.ticker.stop();
       await this.persist();
     }
     await this.ctx.storage.deleteAlarm();
