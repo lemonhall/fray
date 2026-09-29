@@ -1,0 +1,4 @@
+# 本地开发用的密钥。复制成 .dev.vars 后随便填两个随机串即可——本地 D1 是空的，
+# 不会有任何真实数据。生产环境请用 `wrangler secret put`，不要提交真值。
+SESSION_SECRET=dev-session-secret-change-me
+ADMIN_KEY=dev-admin-key-change-me

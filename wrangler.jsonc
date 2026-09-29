@@ -1,0 +1,51 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "fray-api",
+  "main": "src/index.mjs",
+  // 这个日期是**本机 workerd 二进制支持的最新日期**（wrangler 4.100.0 → 2026-06-18）。
+  // 写成比它还新的日期只会让本地 dev 起不来，线上并不需要那么新的语义。
+  "compatibility_date": "2026-06-18",
+
+  // 一个 Worker 部署 = 一个后端 = 多个租户。租户信息存在 D1 里，
+  // Durable Object 的名字里带租户 id，所以 A 游戏和 B 游戏是两套互不可见的房间宇宙。
+  "durable_objects": {
+    "bindings": [
+      { "name": "ROOM", "class_name": "Room" },
+      { "name": "LOBBY", "class_name": "Lobby" }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      // SQLite 存储后端。注意这里**没有** worker_loaders 之类的付费能力，
+      // 免费计划就能部署——游戏逻辑是编译进本 Worker 的，不靠动态加载。
+      "new_sqlite_classes": ["Room", "Lobby"]
+    }
+  ],
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "fray",
+      "database_id": "a5c1b74f-62dd-4a78-b33f-2c26c5dc3bdf"
+    }
+  ],
+
+  // 静态前端与 API 同一个 Worker：`/v1/*` 走 Worker，其余交给资源绑定。
+  // 这样本地开发不需要起两个进程，也不会有跨域问题。
+  "assets": {
+    "directory": "./web",
+    "binding": "ASSETS",
+    // 默认行为是"静态资源优先，剩下的才问 Worker"，也就是说 `/v1/health` 这种
+    // 不存在的文件路径会被资源层直接 404 掉，Worker 根本收不到请求。
+    // 这里显式声明只有 `/v1/*` 先走 Worker——静态文件走资源层的快路径，
+    // API 才是 Worker 的事。
+    "run_worker_first": ["/v1/*"]
+  },
+
+  "observability": { "enabled": true },
+  "vars": {
+    // 租户 id 写在 URL 里，不需要配置；这两个值是给"读日志/调试"看的开关。
+    "TICK_NOTE": "server-authoritative, no resident timers"
+  }
+}

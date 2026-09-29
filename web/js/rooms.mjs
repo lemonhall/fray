@@ -1,0 +1,205 @@
+/**
+ * 房间浏览器：进站之后看到的第一屏。
+ *
+ * 它只做 HTTP：列房间、建房、快速匹配、看排行榜。真正的对局要走 WebSocket，
+ * 而那条通道在 `app.mjs` 里才打开——"浏览"和"开打"是两件事，分开写才看得清。
+ *
+ * 房间列表用轮询（4 秒）而不是长连接：这是**刻意**的。列表刷新慢一点没人受伤，
+ * 但为了它多维持一条常驻连接，会把这套东西的复杂度拉回十年前。
+ */
+
+import { TENANT, apiUrl } from "./config.mjs";
+import { guestSession, listRooms, leaderboard, createRoom, quickMatch } from "./net.mjs";
+import { MODES } from "/sim/data.mjs";
+import { S } from "./state.mjs";
+
+const $ = id => document.getElementById(id);
+const NAME_KEY = "fray.name";
+
+let onJoin = () => {};
+let timer = null;
+let busy = false;
+
+const readName = () => { try { return localStorage.getItem(NAME_KEY) || ""; } catch { return ""; } };
+const writeName = value => { try { localStorage.setItem(NAME_KEY, value); } catch { /* 隐私模式 */ } };
+
+export function nickname() {
+  const typed = $("nickInput").value.trim();
+  return (typed || S.playerName || "游客").slice(0, 16);
+}
+
+function setStatus(text, kind = "") {
+  const pill = $("connPill");
+  pill.classList.toggle("on", kind === "on");
+  pill.classList.toggle("off", kind === "off");
+  $("connText").textContent = text;
+}
+
+function setNote(text, error = false) {
+  const note = $("roomsNote");
+  note.textContent = text;
+  note.classList.toggle("rooms-error", !!error);
+}
+
+/** 列房间 + 排行榜 + 最近战绩。失败时只在底部提示，不清空已有列表。 */
+export async function refresh() {
+  if (busy) return;
+  busy = true;
+  try {
+    const [rooms, board, matches] = await Promise.all([
+      listRooms(), leaderboard(8).catch(() => ({ rows: [] })), recentMatches(),
+    ]);
+    renderRooms(rooms.rooms || []);
+    renderBoard(board.rows || []);
+    renderMatches(matches);
+    setStatus(`已连接 · 租户 ${TENANT}`, "on");
+    setNote(`房间列表每 4 秒自动刷新 · 当前 ${(rooms.rooms || []).length} 个房间`);
+  } catch (error) {
+    setStatus("连不上后端", "off");
+    setNote(`后端连接失败：${error.message}（检查 ?api= 指向的地址与租户 "${TENANT}" 是否已注册）`, true);
+  } finally {
+    busy = false;
+  }
+}
+
+async function recentMatches() {
+  const response = await fetch(apiUrl(`/v1/${encodeURIComponent(TENANT)}/matches?limit=8`));
+  if (!response.ok) throw new Error(`matches_${response.status}`);
+  return (await response.json()).matches || [];
+}
+
+function renderRooms(rooms) {
+  const list = $("roomList");
+  list.replaceChildren();
+  if (!rooms.length) {
+    const empty = document.createElement("div");
+    empty.className = "rooms-empty";
+    empty.textContent = "还没有房间。点右上角「创建房间」开一桌，或者直接快速匹配。";
+    list.append(empty);
+    return;
+  }
+  for (const room of rooms) list.append(card(room));
+}
+
+function card(room) {
+  const mode = MODES[room.mode] || MODES.control;
+  const el = document.createElement("button");
+  el.type = "button";
+  el.className = "room-card";
+  el.dataset.room = room.id;
+  const phase = room.phase === "live" ? ["live", "对局中"] : room.phase === "over" ? ["over", "结算中"] : ["", "准备中"];
+  const humans = Number(room.humans) || 0;
+  const capacity = Number(room.capacity) || mode.maxHumans;
+  el.innerHTML = `<header><div><h3></h3><div class="room-host"></div></div>` +
+    `<span class="badge ${phase[0]}">${phase[1]}</span></header>` +
+    `<div class="room-stats"><span>${mode.name} <b>${mode.sub}</b></span>` +
+    `<span>真人 <b>${humans}/${capacity}</b></span><span>机器人 <b>${room.bots}</b></span></div>` +
+    `<div class="room-fill"><i style="width:${Math.round(humans / Math.max(1, capacity) * 100)}%"></i></div>` +
+    `<span class="room-join">${room.phase === "live" ? "中途加入" : "加入房间"} ↗</span>`;
+  el.querySelector("h3").textContent = room.name;
+  el.querySelector(".room-host").textContent = `房主 ${room.host || "—"} · 房间号 ${room.id}`;
+  el.addEventListener("click", () => onJoin(room.id));
+  return el;
+}
+
+function renderBoard(rows) {
+  const box = $("boardRows");
+  box.replaceChildren();
+  if (!rows.length) { box.append(row("还没有战绩", "打完一局就上榜")); return; }
+  rows.forEach((r, i) => box.append(row(`${i + 1}. ${r.name || r.playerId}`, `${r.kills || 0} 击杀 · ${r.wins || 0} 胜 / ${r.games || 0} 场`)));
+}
+
+function renderMatches(matches) {
+  const box = $("matchRows");
+  box.replaceChildren();
+  if (!matches.length) { box.append(row("还没有对局", "——")); return; }
+  for (const m of matches.slice(0, 5)) {
+    const winner = m.winner === "team:0" ? "蓝队" : m.winner === "team:1" ? "红队" : "混战";
+    box.append(row(`${MODES[m.mode] ? MODES[m.mode].name : m.mode} · ${winner}`, `${mmss(m.durationMs)} · 房间 ${m.roomId}`));
+  }
+}
+
+function row(main, sub) {
+  const el = document.createElement("div");
+  el.className = "side-row";
+  const a = document.createElement("span"); a.textContent = main;
+  const b = document.createElement("i"); b.textContent = sub;
+  el.append(a, b);
+  return el;
+}
+
+const mmss = ms => {
+  const total = Math.max(0, Math.round((ms || 0) / 1000));
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+};
+
+function readCreateForm() {
+  return {
+    name: $("createName").value.trim() || `${nickname()} 的房间`,
+    mode: $("createMode").value,
+    difficulty: Number($("createDifficulty").value) || 0,
+    bots: Math.max(0, Math.min(9, Number($("createBots").value) || 0)),
+  };
+}
+
+async function doCreate() {
+  setNote("正在建房…");
+  try {
+    const created = await createRoom(readCreateForm());
+    $("createPanel").classList.add("hidden");
+    onJoin(created.roomId);
+  } catch (error) {
+    setNote(`建房失败：${error.message}`, true);
+  }
+}
+
+async function doQuickMatch() {
+  setNote("正在寻找房间…");
+  try {
+    const found = await quickMatch({ mode: $("createMode").value, difficulty: 1, bots: 4 });
+    onJoin(found.roomId);
+  } catch (error) {
+    setNote(`快速匹配失败：${error.message}`, true);
+  }
+}
+
+/** 进站时的第一次握手：拿一张游客令牌，顺带把房间列表拉出来。 */
+export async function connect() {
+  const name = nickname();
+  S.playerName = name;
+  try {
+    await guestSession(name);
+    await refresh();
+  } catch (error) {
+    setStatus("身份获取失败", "off");
+    setNote(`后端的租户 "${TENANT}" 还没注册，或者地址不对：${error.message}`, true);
+  }
+}
+
+export function startAutoRefresh() {
+  stopAutoRefresh();
+  timer = setInterval(() => {
+    if (S.screen === "rooms" && !document.hidden) void refresh();
+  }, 4000);
+}
+
+export function stopAutoRefresh() {
+  if (timer) clearInterval(timer);
+  timer = null;
+}
+
+export function initRooms(hooks) {
+  onJoin = hooks.onJoin;
+  $("nickInput").value = readName() || "";
+  $("nickInput").addEventListener("change", () => {
+    writeName($("nickInput").value.trim());
+    void connect();
+  });
+  $("refreshRooms").addEventListener("click", () => void refresh());
+  $("openCreateButton").addEventListener("click", () => $("createPanel").classList.toggle("hidden"));
+  $("cancelCreate").addEventListener("click", () => $("createPanel").classList.add("hidden"));
+  $("createRoomButton").addEventListener("click", () => void doCreate());
+  $("quickMatchButton").addEventListener("click", () => void doQuickMatch());
+  $("roomsHeadline").textContent = `选一个战场，或者自己开一桌`;
+  return { connect, refresh, setStatus, setNote };
+}

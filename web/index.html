@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#0a0e17">
+<title>FRAY · 霓虹前线</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/styles/game.css">
+<link rel="stylesheet" href="/styles/net.css">
+</head>
+<body>
+<svg xmlns="http://www.w3.org/2000/svg" class="svg-library" aria-hidden="true"><defs>
+<symbol id="i-bolt" viewBox="0 0 24 24"><path d="m14 2-11 13h8l-1 7L21 9h-8l1-7Z" fill="currentColor" stroke="none"/></symbol>
+<symbol id="i-cross" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6"/><path d="M12 2v5m0 10v5M2 12h5m10 0h5"/></symbol>
+<symbol id="i-cup" viewBox="0 0 24 24"><path d="M7 3h10v6a5 5 0 0 1-10 0V3Zm0 2H3v3a4 4 0 0 0 5 4m9-7h4v3a4 4 0 0 1-5 4m-4 2v6m-4 0h8"/></symbol>
+<symbol id="i-sound" viewBox="0 0 24 24"><path d="m11 4-6 5H2v6h3l6 5V4Zm5 4a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/></symbol>
+<symbol id="i-mute" viewBox="0 0 24 24"><path d="m11 4-6 5H2v6h3l6 5V4Zm5 5 6 6m0-6-6 6"/></symbol>
+<symbol id="i-expand" viewBox="0 0 24 24"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/></symbol>
+<symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14" stroke-width="4"/></symbol>
+<symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h16m-7-7 7 7-7 7"/></symbol>
+<symbol id="i-heart" viewBox="0 0 24 24"><path d="M12 21 3.5 12A5.5 5.5 0 0 1 12 5a5.5 5.5 0 0 1 8.5 7L12 21Z"/></symbol>
+<symbol id="i-skull" viewBox="0 0 24 24"><path d="M6 17a9 9 0 1 1 12 0v4H6v-4Z"/><circle cx="8" cy="11" r="1.5" fill="currentColor"/><circle cx="16" cy="11" r="1.5" fill="currentColor"/><path d="M10 18v3m4-3v3"/></symbol>
+<symbol id="i-shield" viewBox="0 0 24 24"><path d="m12 2 9 4-1 9-8 7-8-7-1-9 9-4Z"/><path d="m8 12 3 3 5-6"/></symbol>
+<symbol id="i-hex" viewBox="0 0 24 24"><path d="m12 2 9 5v10l-9 5-9-5V7l9-5Z"/><circle cx="12" cy="12" r="3"/></symbol>
+<symbol id="i-grenade" viewBox="0 0 24 24"><path d="m13 6 3-3 4 4-3 3M10 4l3-2m-3 5 9 9"/><circle cx="10" cy="14" r="7"/><path d="m6 15 6-6m-4 10 8-8"/></symbol>
+</defs></svg>
+<main id="app">
+<section id="rooms" aria-label="房间浏览器">
+<div class="rooms-bg"></div>
+<header class="rooms-head">
+<div class="rooms-brand"><span class="brand-mark">F<span>↗</span></span><div>FRAY<small>霓虹前线 / SERVER AUTHORITATIVE</small></div></div>
+<div class="rooms-id">
+<label class="nick-field"><span>昵称</span><input id="nickInput" maxlength="16" autocomplete="off" spellcheck="false" placeholder="柠檬叔"></label>
+<span class="conn-pill" id="connPill"><i></i><b id="connText">连接中…</b></span>
+<button class="icon-button sound-toggle" title="音效开关" aria-label="音效开关"><svg><use href="#i-sound"/></svg></button>
+</div>
+</header>
+<div class="rooms-layout">
+<div class="rooms-main">
+<div class="rooms-bar">
+<div><div class="section-label">房间列表 <span>ROOM BROWSER</span></div><h2 id="roomsHeadline">选一个战场，或者自己开一桌</h2></div>
+<div class="rooms-bar-actions">
+<button id="refreshRooms" class="icon-button" title="刷新列表" aria-label="刷新列表">⟳</button>
+<button id="quickMatchButton" class="secondary-button">快速匹配</button>
+<button id="openCreateButton" class="primary-button">创建房间 <span>↗</span></button>
+</div>
+</div>
+<div id="createPanel" class="create-panel hidden">
+<label><span>房间名</span><input id="createName" maxlength="24" placeholder="我的战场" autocomplete="off"></label>
+<label><span>模式</span><select id="createMode"><option value="control">热点争夺 · 3V3</option><option value="survival">荒野生存 · 混战</option></select></label>
+<label><span>机器人难度</span><select id="createDifficulty"><option value="0">轻松</option><option value="1" selected>标准</option><option value="2">老兵</option></select></label>
+<label><span>机器人数量</span><input id="createBots" type="number" min="0" max="9" value="4"></label>
+<button id="createRoomButton" class="primary-button">建立房间</button>
+<button id="cancelCreate" class="text-button">取消</button>
+<p class="create-hint" id="createHint">机器人负责补位，一个人也能开打；真人进来会占掉机器人名额。</p>
+</div>
+<div class="room-list" id="roomList"></div>
+<p class="rooms-note" id="roomsNote">房间列表每 4 秒自动刷新。</p>
+</div>
+<aside class="rooms-side">
+<div class="side-panel"><div class="side-panel-head">排行榜 <span>LEADERBOARD</span></div><div id="boardRows" class="side-rows"></div></div>
+<div class="side-panel"><div class="side-panel-head">最近战绩 <span>RECENT</span></div><div id="matchRows" class="side-rows"></div></div>
+<div class="side-panel"><div class="side-panel-head">怎么玩 <span>STEPS</span></div><ol class="side-steps"><li>输个昵称，进房间或点快速匹配。</li><li>房主按「+」投放机器人、调难度。</li><li>房主开打，人和机器人同场竞技。</li></ol></div>
+</aside>
+</div>
+</section>
+<section id="lobby" aria-label="房间候场">
+<div class="room-banner" id="roomBanner">
+<span class="phase-badge" id="roomPhase">准备中</span>
+<strong id="roomTitle">房间</strong>
+<span class="room-code" id="roomCodeLabel">#------</span>
+<span class="room-meta" id="roomMeta">热点争夺 · 0 人 + 0 机器人</span>
+<button class="text-button" id="leaveRoomButton">离开房间 <span>↗</span></button>
+</div>
+<aside class="roster-panel" id="rosterPanel" aria-label="参战名册">
+<div class="roster-top"><span>参战名册 <b>ROSTER</b></span><span class="panel-counter" id="rosterCount">1 / 6</span></div>
+<div class="roster-rows" id="rosterRows"></div>
+<div class="roster-controls">
+<div class="bot-stepper" id="botStepper" title="只有房主能调整">
+<span>机器人 <b>BOT</b></span>
+<button type="button" data-bot="-1" aria-label="减少机器人">−</button>
+<b id="botCount">4</b>
+<button type="button" data-bot="1" aria-label="增加机器人">+</button>
+</div>
+<span class="roster-note" id="rosterNote">等待房主开始…</span>
+</div>
+</aside>
+<div class="lobby-grid"></div><div class="ambient ambient-a"></div><div class="ambient ambient-b"></div>
+<header class="masthead"><a class="brand" href="#" aria-label="FRAY 首页"><span class="brand-mark">F<span>↗</span></span><span>FRAY<small>霓虹前线 / SERVER AUTHORITATIVE</small></span></a><div class="build-pill"><i></i> 1.0 <span>在线人机混战，已就绪</span></div><div class="header-right"><div class="career-badge"><span id="accountLevel">LV.01</span><div><strong id="recordLabel">新的征程</strong><div class="career-track"><i id="careerFill"></i></div></div></div><button class="icon-button" id="helpHeader" title="玩法与操作" aria-label="玩法与操作">?</button><button class="icon-button sound-toggle" title="音效开关" aria-label="音效开关"><svg><use href="#i-sound"/></svg></button><button class="icon-button fullscreen-button" title="全屏" aria-label="全屏"><svg><use href="#i-expand"/></svg></button></div></header>
+<canvas id="showcase" aria-hidden="true"></canvas>
+<div class="lobby-content">
+<div class="intro"><div class="eyebrow"><span></span> VOLUME 02 / 霓虹竞技场</div><h1>这一次，<br>打出<span>新花样。</span></h1><p class="intro-description">抢点。进化。逆转。<br>每一次升级，都是另一种打法。</p><div class="feature-chips"><span><i>↗</i> 局内三选一</span><span><i>◈</i> 3v3 抢点</span></div>
+<div class="mode-area"><div class="section-label">选择战场 <span>GAME MODE</span></div><button class="mode-card selected" data-mode="control" aria-pressed="true"><span class="mode-art control-art"><svg><use href="#i-hex"/></svg></span><span><strong>热点争夺 <em>NEW</em></strong><small>3v3 · 占点得分 · 倒下可重生</small></span><i class="radio-dot"></i></button><button class="mode-card" data-mode="survival" aria-pressed="false"><span class="mode-art survival-art"><svg><use href="#i-skull"/></svg></span><span><strong>荒野生存</strong><small>10 人混战 · 能量成长 · 极限缩圈</small></span><i class="radio-dot"></i></button></div><button class="text-button" id="helpLobby">战术手册 <span>↗</span></button></div>
+<div class="stage-space" aria-hidden="true"><div class="stage-caption"><span class="stage-index">01 / 04</span><strong id="stageHeroName">SPARK</strong><small><i></i> 战斗系统在线 / READY TO RUSH</small></div></div>
+<aside class="loadout-panel"><div class="panel-topline"><span>作战配置 <b>LOADOUT</b></span><span class="panel-counter">01 — 04</span></div><div class="hero-heading"><div><span id="heroRole" class="role-label">突击手 / ASSAULT</span><h2 id="heroName">阿烁<span>SPARK</span></h2></div><div class="hero-level"><svg><use href="#i-bolt"/></svg></div></div>
+<div class="hero-options" role="group" aria-label="选择斗士"><button class="hero-option selected" data-hero="0" aria-label="选择阿烁" aria-pressed="true"><canvas width="130" height="110"></canvas><span>阿烁</span><i></i></button><button class="hero-option" data-hero="1" aria-label="选择铁皮" aria-pressed="false"><canvas width="130" height="110"></canvas><span>铁皮</span><i></i></button><button class="hero-option" data-hero="2" aria-label="选择夜隼" aria-pressed="false"><canvas width="130" height="110"></canvas><span>夜隼</span><i></i></button><button class="hero-option" data-hero="3" aria-label="选择弧光" aria-pressed="false"><canvas width="130" height="110"></canvas><span>弧光</span><i></i></button></div>
+<p class="hero-description" id="heroDescription"></p><div class="hero-stats"><div><span>生存</span><div class="stat-track"><i id="statHealth"></i></div></div><div><span>火力</span><div class="stat-track"><i id="statDamage"></i></div></div><div><span>射程</span><div class="stat-track"><i id="statRange"></i></div></div></div><div class="super-info"><div class="super-info-icon"><svg><use href="#i-bolt"/></svg></div><div><small>超级技能</small><strong id="superName">烈焰弹幕</strong><p id="superDescription"></p></div><kbd>Q</kbd></div>
+<div class="section-label">战术装置 <span>按 E 释放</span></div><div class="gadget-select" role="group" aria-label="战术装置"><button data-gadget="grenade" class="selected" aria-pressed="true"><svg><use href="#i-grenade"/></svg>冲击雷</button><button data-gadget="shield" aria-pressed="false"><svg><use href="#i-shield"/></svg>相位盾</button><button data-gadget="heal" aria-pressed="false"><svg><use href="#i-heart"/></svg>修复器</button></div><p id="gadgetDescription" class="gadget-description">朝瞄准方向投出延时爆弹，爆炸可摧毁掩体。</p>
+<div class="match-settings"><div class="section-label">机器人难度 <span>房主设置</span></div><div class="difficulty-select" role="group" aria-label="机器人难度"><button class="selected" data-difficulty="0" aria-pressed="true">休闲</button><button data-difficulty="1" aria-pressed="false">标准</button><button data-difficulty="2" aria-pressed="false">挑战</button></div></div>
+<button class="assist-toggle" id="assistToggle" aria-pressed="false"><span>辅助开火 <small>自动瞄准近处可见目标</small></span><i></i></button>
+<button id="startButton" class="start-button"><span>出发，开打<small id="startModeLabel">热点争夺 · 霓虹中枢</small></span><span class="start-arrow"><svg><use href="#i-arrow"/></svg></span></button><div class="ready-note"><span class="live-dot"></span><span id="teamNote">你 + 2 个 AI 队友 vs 3 个 AI 对手</span></div>
+</aside></div>
+<div class="quick-start" id="quickStartBar"><span><i class="live-dot"></i><b id="quickMode">热点争夺</b><small>服务端对战 · 人机混战</small></span><button id="quickStart">出发，开打 <span>↗</span></button></div><footer class="lobby-footer"><span>服务端权威 · 人机同场</span><span class="footer-mid"><i></i> Worker + Durable Objects · 一个账号多个租户</span><span>ONLINE BUILD <b>1.0</b></span></footer></section>
+<section id="arena" class="hidden" aria-label="对战场景"><canvas id="game" tabindex="0" aria-label="竞技场。WASD移动，鼠标射击，Q超级技能，E战术装置，空格闪避。"></canvas><div class="game-vignette"></div>
+<div class="hud-top"><div class="hud-brand"><span class="brand-mark">F<span>↗</span></span><div id="mapHeading">霓虹中枢<small>热点争夺 / 3V3</small></div></div><div class="match-status"><div class="team-score" id="teamScore"><span class="blue-team"><small>我方</small><b id="blueScore">0</b></span><div class="score-center"><svg><use href="#i-hex"/></svg><span id="matchTimer">03:00</span></div><span class="red-team"><b id="redScore">0</b><small>敌方</small></span><div class="team-progress"><i id="blueProgress"></i><i id="redProgress"></i></div></div><div class="alive-counter hidden" id="survivalScore"><svg><use href="#i-skull"/></svg><span>剩余斗士</span><b id="aliveValue">10</b></div><div class="storm-status" id="stormStatus"><span class="storm-dot"></span><span id="stormLabel">争夺中央热点</span></div></div><div class="hud-actions"><button id="assistGame" class="icon-button" title="辅助开火（F）" aria-label="辅助开火（F）"><svg><use href="#i-cross"/></svg></button><button class="icon-button sound-toggle" title="音效开关" aria-label="音效开关"><svg><use href="#i-sound"/></svg></button><button id="pauseButton" class="icon-button" title="暂停（Esc）" aria-label="暂停游戏"><svg><use href="#i-pause"/></svg></button></div></div>
+<div class="kill-feed" id="killFeed" aria-live="polite"></div><div class="minimap-panel"><canvas id="minimap" width="160" height="160" aria-label="小地图"></canvas><div><span id="gameTime">00:00</span><span id="killCount">淘汰 0</span></div></div>
+<div class="contract-panel" id="contractPanel"><div class="contract-head">本局挑战 <span>+60 生涯经验 / 项</span></div><div id="contractRows"></div></div>
+<div id="announcement" class="announcement"><span id="announcementSub">抢先占领中央热点</span><strong id="announcementTitle">全员出击</strong></div><div id="respawnOverlay" class="respawn-overlay hidden"><span>重新部署中</span><strong id="respawnCounter">4</strong><p>局内强化保留，准备反击。</p></div>
+<div id="gameTip" class="game-tip"></div><div class="perk-strip" id="perkStrip"></div><div class="hit-marker" id="hitMarker"></div>
+<div class="hud-bottom"><div class="player-panel"><canvas id="playerPortrait" width="90" height="90"></canvas><div class="player-bars"><div class="player-title"><strong id="playerName">阿烁</strong><span class="cube-count">◆ <b id="cubeValue">0</b></span><b class="match-level" id="matchLevel">LV.1</b></div><div class="health-track"><i id="healthFill"></i><span id="healthText">4400 / 4400</span></div><div class="ammo-track"><div><i></i></div><div><i></i></div><div><i></i></div></div><div class="xp-track"><i id="xpFill"></i></div></div></div><div class="ability-buttons"><button id="dashButton" class="ability dash-ability" aria-label="闪避（空格）"><span class="ability-symbol">»</span><small id="dashValue">闪避</small><kbd>SPACE</kbd><i class="cooldown-fill"></i></button><button id="gadgetButton" class="ability gadget-ability" aria-label="战术装置（E）"><svg><use id="gadgetIcon" href="#i-grenade"/></svg><small id="gadgetValue">冲击雷</small><kbd>E</kbd><i class="cooldown-fill"></i></button><button id="superButton" class="ability super-ability" aria-label="超级技能（Q）"><svg><use href="#i-bolt"/></svg><small id="superValue">0%</small><kbd>Q</kbd></button></div></div>
+<div class="desktop-controls"><kbd>WASD</kbd> 移动 <span>·</span> 鼠标射击 <span>·</span><kbd>Q</kbd> 超级技能 <span>·</span><kbd>E</kbd> 战术装置 <span>·</span><kbd>SPACE</kbd> 闪避 <span>·</span><kbd>F</kbd> 辅助开火</div>
+<div class="touch-controls" id="touchControls"><div class="joystick" id="moveStick"><span>移动</span><i></i></div><div class="joystick aim-stick" id="aimStick"><span>瞄准 / 射击</span><i><svg><use href="#i-cross"/></svg></i></div></div></section>
+<div id="upgradeOverlay" class="upgrade-overlay hidden"><section class="upgrade-dialog" role="dialog" aria-modal="true" aria-labelledby="upgradeTitle"><span class="modal-eyebrow">EVOLVE YOUR PLAYSTYLE</span><h2 id="upgradeTitle">战场进化</h2><p>三选一，构筑你的专属打法。<span>战斗已暂停</span></p><div id="upgradeCards" class="upgrade-cards"></div><small class="upgrade-hint">点击选择 · 或按数字 1 / 2 / 3</small></section></div>
+<div id="modalBackdrop" class="modal-backdrop hidden"><section class="modal" id="pauseModal" role="dialog" aria-modal="true" aria-labelledby="pauseTitle"><span class="modal-eyebrow">TACTICAL PAUSE</span><h2 id="pauseTitle">喘口气，再来。</h2><p>战场已暂停。战术装置与超级技能可以改变战局。</p><button id="resumeButton" class="primary-button">继续战斗 <span>↗</span></button><button id="restartButton" class="secondary-button">重新开局</button><button id="exitButton" class="text-button">返回大厅</button></section><section class="modal help-modal hidden" id="helpModal" role="dialog" aria-modal="true" aria-labelledby="helpTitle"><span class="modal-eyebrow">FIELD MANUAL / 2.0</span><h2 id="helpTitle">不止是开枪。</h2><div class="help-grid"><div><kbd>WASD / 方向键</kbd><strong>移动与走位</strong><p>利用墙体挡弹，进入全息灌木隐蔽。</p></div><div><kbd>鼠标左键 / F</kbd><strong>射击 / 辅助开火</strong><p>长按射击，F 切换自动瞄准与开火。</p></div><div><kbd>Q / 右键 · E</kbd><strong>超级技能 · 战术装置</strong><p>命中蓄能释放大招；E 装置按冷却重复使用。</p></div><div><kbd>SPACE · 1 / 2 / 3</kbd><strong>闪避 · 选择强化</strong><p>空格冲刺并短暂无敌，升级时三选一。</p></div></div><div class="help-rules"><p><b>热点争夺：</b>你与 2 个 AI 队友对抗 3 个 AI；独占热点即可持续得分，双方在圈内时暂停计分。先到 100 分获胜，3 分钟后比较得分，平分进入加时；热点每 40 秒迁移。倒下 4 秒后重生。</p><p><b>荒野生存：</b>与 9 个 AI 混战，最后存活获胜；20 秒后风暴缩圈。击碎箱子、拾取能量提升生命与伤害。</p><p><b>进化与补给：</b>有效伤害、能量和占点提供经验；每次升级三选一，最多升至 6 级。空投恢复生命、弹药与超能，开启 7 秒火力加速。两种模式均可进化。</p><p><b>恢复与触屏：</b>脱战 3.5 秒自动回血；左摇杆移动，右摇杆拖动瞄准开火，轻点自动瞄准。辅助开火仍需自行走位。触屏横屏视野更开阔。</p></div><button id="closeHelp" class="primary-button">准备好了 <span>↗</span></button></section></div>
+<section id="results" class="result-screen hidden" aria-label="对战结算"><div class="result-confetti" id="confetti"></div><div class="result-card"><span class="modal-eyebrow" id="resultEyebrow">MATCH COMPLETE</span><div class="result-rank" id="resultRank">WIN</div><h2 id="resultTitle">漂亮的配合。</h2><p id="resultDescription"></p><div class="result-stats"><div><strong id="resultKills">0</strong><span>淘汰对手</span></div><div><strong id="resultDamage">0</strong><span>有效伤害</span></div><div><strong id="resultTime">00:00</strong><span>对战时长</span></div></div><div class="result-build" id="resultBuild"></div><div class="result-xp"><span id="resultXP">+120 XP</span><small id="resultContracts">本局挑战 0 / 3</small></div><div class="result-reward"><svg><use href="#i-cup"/></svg><span id="resultRecord"></span></div><button id="playAgainButton" class="primary-button">再来一局 <span>↗</span></button><button id="lobbyButton" class="text-button">返回大厅 · 调整配置</button></div></section>
+<div class="sr-only" id="screenReaderStatus" aria-live="polite"></div></main>
+<script type="module" src="/js/app.mjs"></script>
+</body>
+</html>

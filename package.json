@@ -1,0 +1,23 @@
+{
+  "name": "fray",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "Server-authoritative online arena shooter on Cloudflare Workers + Durable Objects",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node tools/build.mjs",
+    "dev": "wrangler dev",
+    "test": "node --test \"tests/**/*.test.mjs\"",
+    "test:watch": "node --test --watch \"tests/**/*.test.mjs\"",
+    "e2e": "node tools/e2e-local.mjs",
+    "deploy": "npm run build && wrangler deploy",
+    "smoke": "node tools/smoke.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.100.0"
+  }
+}

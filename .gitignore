@@ -1,0 +1,11 @@
+node_modules/
+.wrangler/
+.dev.vars
+.vercel/
+
+# 构建产物：共享内核会被复制进静态站点，复制品不入库（源永远是 sim/）。
+web/sim/
+
+# 本地跑 E2E / 冒烟测试时留下的东西
+.artifacts/
+*.log
