@@ -21,6 +21,7 @@ export function attach(room, ws, playerId, name) {
   // 每个连接一份消息预算。原来的漏桶挂在房间上，等于 6 个人共享 70 条/秒——
   // 6 个人各 25Hz 上行就是 150 条/秒，全员都在被自己的房间限流，输入成片地丢。
   const conn = { playerId, name, budgetAt: 0, budgetN: 0 };
+  room.lastMsgMs = Date.now();
   room.conns.set(ws, conn);
   ws.addEventListener("message", ev => onMessage(room, ws, ev.data));
   ws.addEventListener("close", () => detach(room, ws));
@@ -68,6 +69,9 @@ export function detach(room, ws) {
 export function onMessage(room, ws, data) {
   const conn = room.conns.get(ws);
   if (!conn) return;
+  // "这个房间还有人活着"的唯一证据：有用的人会一直上行（输入 25Hz、心跳 2 秒一次）。
+  // alarm 拿它判断要不要回收房间——名册的时间戳做不到这件事（见 `reclaimReason`）。
+  room.lastMsgMs = Date.now();
   if (!rateOk(conn)) return;
   let msg;
   try { msg = JSON.parse(String(data)); } catch { return; }

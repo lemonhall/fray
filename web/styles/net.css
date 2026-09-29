@@ -39,9 +39,18 @@ body.rooms-open{overflow:auto;background:var(--bg)}
 .rooms-bar h2{margin:8px 0 0;font-size:27px;line-height:1.15}
 /* game.css 里的按钮默认 `width:100%`（它们本来长在一条竖直的侧栏里）。搬到横向
    工具条上如果不复位，每个按钮都会各占一行——"快速匹配 / 创建房间"会竖着摞起来。 */
-.rooms-bar-actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
-.rooms-bar-actions>*{width:auto;flex:0 0 auto}
-.rooms-bar-actions .primary-button,.rooms-bar-actions .secondary-button{padding:11px 17px;border-radius:10px;font-size:13px;font-weight:800}
+/* `margin-left:auto`：窄屏折行时这一组会独占第二行，没有它就会被 `space-between`
+   丢到最左边、跟标题左对齐，看着像漏排了。 */
+.rooms-bar-actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-left:auto}
+/* 三个控件（刷新 / 快速匹配 / 创建房间）必须长得一样高。原版这套按钮各有各的
+   尺寸：`⟳` 是 38 的方格、`快速匹配` 41、`创建房间` 49（里面那个 20px 的 `↗`
+   把行高撑起来了），并排就是参差不齐；而 `.secondary-button` 还自带
+   `margin-top:13px`，会把"快速匹配"整块往下顶 6.5px。这里一次性统一。 */
+.rooms-bar-actions>*{flex:0 0 auto;width:auto;height:42px;margin:0;
+  display:inline-flex;align-items:center;justify-content:center;
+  padding:0 17px;border-radius:10px;font-size:13px;font-weight:800;line-height:1}
+.rooms-bar-actions .icon-button{width:42px;padding:0;font-size:17px}
+.rooms-bar-actions .primary-button span{font-size:15px}
 .rooms-bar-actions .secondary-button{background:#1d2b3d;color:var(--text);border:1px solid var(--line)}
 
 .room-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(272px,1fr));gap:14px;min-height:120px}

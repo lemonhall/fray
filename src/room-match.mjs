@@ -185,3 +185,22 @@ export function beatGrid({ now, nextBcastMs, broadcastMs = 50 }) {
   const target = nextBcastMs + skipped * broadcastMs;
   return { target, next: target + broadcastMs, skipped, started: false };
 }
+
+/**
+ * "这个房间该不该回收"——和 `beatGrid` 一样抽成纯函数，因为它是**破坏性**的那一步
+ * （回收会把名册清空、把对局扔掉），而 `room.mjs` 在 Node 里起不来（`cloudflare:workers`）。
+ *
+ * 两条判据，缺一不可：
+ *   - `empty`：一个连接都没有了。正常退房走的都是这一条；
+ *   - `silent`：还有连接，但**整整 `idleMs` 没有收到过任何消息**。客户端 2 秒一个心跳，
+ *     所以这只会命中"连接其实是僵尸"的情况。
+ *
+ * 曾经用 `state.updatedAt`（名册最后变动时间）当判据，那是错的：一局从头打到尾
+ * 名册一次都不动，于是对局进行到第 10 分钟，房间会被自己的 alarm 拆掉——名册清空、
+ * 世界扔掉，而玩家还连着、还在打。
+ */
+export function reclaimReason({ conns = 0, lastMsgMs = 0, now = 0, idleMs = 30 * 60_000 }) {
+  if (conns <= 0) return "empty";
+  if (lastMsgMs && now - lastMsgMs > idleMs) return "silent";
+  return "";
+}

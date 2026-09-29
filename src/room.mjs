@@ -18,12 +18,12 @@ import { encodeSnapshot } from "../sim/wire.mjs";
 import { applyPerk } from "../sim/actor.mjs";
 import { verifyToken } from "./auth.mjs";
 import {
-  createRoomState, isHost, view as roomView, publicView, startCheck,
+  createRoomState, isHost, view as roomView, publicView, startCheck, pendingReady,
 } from "./room-state.mjs";
-import { beginMatch, resetMatch, actorIdOf } from "./room-match.mjs";
+import { beginMatch, resetMatch, actorIdOf, reclaimReason } from "./room-match.mjs";
 import { MatchTicker } from "./room-ticker.mjs";
 import { attach, detach, onMessage, broadcastRoom, broadcast, sendTo } from "./room-conns.mjs";
-import { ALARM_MS } from "./room-consts.mjs";
+import { ALARM_MS, ROOM_IDLE_MS, ROOM_PUBLISH_MS } from "./room-consts.mjs";
 import { recordMatch } from "./results.mjs";
 
 export class Room extends DurableObject {
@@ -35,6 +35,9 @@ export class Room extends DurableObject {
     this.mapMsg = null;
     this.lastBroadcastMs = 0;
     this.reported = false;
+    // 两条"这个房间还活着吗"的证据：最后一条上行消息、最后一次回写目录。
+    this.lastMsgMs = 0;
+    this.lastPublishMs = 0;
     // 时钟在节拍器里（`room-ticker.mjs`）：网格、世界推进、结束回调都归它。
     this.ticker = new MatchTicker({
       onFrame: now => this.broadcastSnapshot(now),
@@ -224,6 +227,7 @@ export class Room extends DurableObject {
   /** 房间目录是 Lobby 的职责，Room 只负责把最新状态推过去。 */
   async publish() {
     if (!this.state) return;
+    this.lastPublishMs = Date.now();
     try { await this.env.LOBBY.getByName(this.state.tenant).update(publicView(this.state)); }
     catch { /* 目录是加速项，写失败不该让对局停摆 */ }
   }
@@ -235,15 +239,22 @@ export class Room extends DurableObject {
     } catch { /* 结算入库失败不阻塞房间回收 */ }
   }
 
-  /** 兜底心跳：清理空房、续订目录、必要时回到 staging。 */
+  /**
+   * 兜底心跳：清理空房、续订目录、必要时回到 staging。
+   *
+   * 把"房间是不是死了"这件事交给 `reclaimReason`（纯函数，有测试钉着）。这里只有
+   * 两件不能写错的事：**房间还有人连着就绝不回收**，以及**定期回写目录**——目录
+   * 那边 90 秒没收到回写就当这条房间过期，对局中名册不动，不补写就会从列表上消失。
+   */
   async alarm() {
     const now = Date.now();
-    if (this.conns.size === 0) {
-      if (this.state) await this.delistDeadRoom();
-      return;
-    }
+    const reason = reclaimReason({ conns: this.conns.size, lastMsgMs: this.lastMsgMs, now, idleMs: ROOM_IDLE_MS });
+    if (reason) return this.delistDeadRoom();
     if (this.world && this.world.phase === "live") this.tick(false);
-    if (now - (this.state?.updatedAt || 0) > 10 * 60_000) return this.delistDeadRoom();
+    // 候场页那个"谁在磨蹭"的秒数是按当前时间算的，而名册只在有变动时才广播。
+    // 没有人动的时候，房主看到的就是一个冻住的数字——所以这里每隔一拍补一次广播。
+    else if (this.state && this.state.phase === "staging" && pendingReady(this.state).length) this.broadcastRoom();
+    if (now - this.lastPublishMs > ROOM_PUBLISH_MS) void this.publish();
     await this.ctx.storage.setAlarm(now + ALARM_MS);
   }
 
@@ -257,6 +268,11 @@ export class Room extends DurableObject {
       this.ticker.stop();
       await this.persist();
     }
+    // 回收时如果还有连接挂着（只可能是"连着却一条消息都不来"的僵尸），当场请它们
+    // 断开：让浏览器得到一个明确的"断开"，而不是留在一个名册永远是空的房间里。
+    // 先清 Map 再关，免得关闭事件回调进 `detach` 又走一遍名册流程。
+    for (const [ws] of this.conns) { try { ws.close(1000, "room_reclaimed"); } catch { /* 已经关了 */ } }
+    this.conns.clear();
     await this.ctx.storage.deleteAlarm();
   }
 }

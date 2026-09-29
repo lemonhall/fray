@@ -235,7 +235,9 @@ export function publicView(state) {
     phase: state.phase,
     humans: state.members.length,
     bots: state.bots,
-    capacity: MODES[state.mode].maxHumans,
+    // 上限一律报**生效值**（租户规则与模式上限取小的那个）。报模式上限的话，
+    // 一个"只允许 4 人"的租户会显示 4/6，快速匹配还会照 6 挑房间，把人塞进满员房。
+    capacity: state.maxHumans,
     host: state.hostName,
     // 房间列表上要能一眼看出"这桌还能不能中途加入""有几个人已经举手了"。
     join: state.joinLive !== false,
@@ -245,7 +247,8 @@ export function publicView(state) {
   };
 }
 
-export function view(state, selfId) {
+/** 给玩家看的细节版。`now` 由调用方传进来——偷读 `Date.now()` 会让这一层不再是纯函数。 */
+export function view(state, selfId, now = Date.now()) {
   const cfg = MODES[state.mode];
   const me = state.members.find(m => m.playerId === selfId) || null;
   const pending = pendingReady(state);
@@ -260,8 +263,7 @@ export function view(state, selfId) {
     diff: state.difficulty,
     bots: state.bots,
     maxBots: state.maxBots,
-    cap: state.maxHumans,
-    capacity: cfg.maxHumans,
+    capacity: state.maxHumans,
     perTeam: perTeamCap(state),
     teams: cfg.teams || 0,
     join: state.joinLive !== false,
@@ -273,7 +275,7 @@ export function view(state, selfId) {
       rdy: m.ready ? 1 : 0,
       // 磨蹭了多久（毫秒）。房主凭这个数决定要不要踢人——"等得久"要看得见，
       // 否则"踢掉那个不 ready 的"就只能凭印象。
-      wait: m.ready || m.playerId === state.hostId ? 0 : Date.now() - m.joinedAt,
+      wait: m.ready || m.playerId === state.hostId ? 0 : Math.max(0, now - m.joinedAt),
       me: m.playerId === selfId ? 1 : 0,
     })),
     you: {

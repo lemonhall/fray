@@ -127,12 +127,17 @@ function renderReadyState(current, mode) {
   button.title = `${mode.name} · 举手之后房主才能开打`;
   // 开打按钮只在"房主 + 全员举手 + 人数够"的时候才是亮的；服务端还会再拦一次。
   const enough = current.members.length + current.bots >= 2;
-  const ready = isHost() && current.allReady && enough && current.ph === "staging";
+  // 超编也要挡住：从荒野生存（上限 10）切回热点争夺（上限 6）时名册不会自动瘦身，
+  // 按钮却照亮，点下去只会被服务端回一句 `too_many`——按钮骗人比按钮变灰糟糕多了。
+  const ready = isHost() && current.allReady && enough && !overCapacity(current) && current.ph === "staging";
   $("startButton").disabled = !ready;
   $("startButton").classList.toggle("hold", !ready);
   $("startButton").querySelector("span").firstChild.textContent =
     isHost() ? (ready ? "出发，开打" : "等大家举手") : "等待房主开始";
 }
+
+const overCapacity = current =>
+  current.members.length + current.bots > current.capacity + current.maxBots;
 
 /** 选边：三个按钮（自动 / 蓝 / 红），选中态由服务端回推的 `you.team` 决定。 */
 function renderTeamPicker(current) {
@@ -156,6 +161,12 @@ function renderNotes(current, mode) {
   // 刚闪过一次性提示就先让它把话说完，别立刻被例行文案盖掉。
   if (Date.now() < noteHoldUntil) {
     // 什么都不做
+  } else if (overCapacity(current)) {
+    note.textContent =
+      `人太多了：现在 ${current.members.length} 人 + ${current.bots} 机器人，` +
+      `而这间房最多带 ${current.capacity} 人 + ${current.maxBots} 机器人。` +
+      `换回装得下的模式，或者请几位出去。`;
+    note.classList.add("warn");
   } else if (!enough) {
     note.textContent = "至少要有两个参战者才能开打（加个机器人就行）";
     note.classList.add("warn");

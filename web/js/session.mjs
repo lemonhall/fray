@@ -162,6 +162,14 @@ function onServerError(msg) {
   if (msg.error === "team_rejected") {
     notice("那一边已经满了，换一边或者选自动。", true);
     flashRoomNote("那一边已经满了：换一边，或者点「自动」。");
+    return;
+  }
+  // 换模式（10 人混战 → 3v3）之后名册可能比新上限还大，这时开局会被服务端拒。
+  // 只写 `screenReaderStatus` 等于什么都没说——玩家点一下"开打"，界面毫无动静。
+  if (msg.error === "too_many") {
+    const text = "人太多了：换回能装下这么多人的模式，或者请几位离开房间。";
+    notice(text, true);
+    flashRoomNote(text);
   }
 }
 
