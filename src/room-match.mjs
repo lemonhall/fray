@@ -12,6 +12,7 @@ import { newActor } from "../sim/actor.mjs";
 import { findOpen, spawnPoints } from "../sim/map.mjs";
 import { encodeMap } from "../sim/wire.mjs";
 import { stepWorld } from "../sim/step.mjs";
+import { resetQueue } from "../sim/netcode.mjs";
 import { rosterOf } from "./room-state.mjs";
 
 /** 开一局新的：换种子、重铺地图、重排出生点。房主点一次"开始"就走到这里。 */
@@ -59,15 +60,16 @@ export function joinLive(world, member) {
 }
 
 /**
- * 掉线：只清掉最后一次输入。
+ * 掉线：清掉还没消化的输入命令。
  *
  * 刻意**不**把角色从场上拿掉——那样会让"重连"变成一个需要重放名额的复杂状态机。
  * 角色留在原地挨打（热点争夺里还会按既有规则重生），重连上来接着用同一个实体。
+ * 但命令队列必须清空：那是"我接下来还要往哪走"的债，人不在了就不该继续走。
  */
 export function dropPlayer(world, playerId) {
   if (!world) return;
   const actor = world.actors.find(a => a.ownerId === playerId);
-  if (actor) actor.input = null;
+  if (actor) resetQueue(actor);
 }
 
 export function actorIdOf(world, playerId) {

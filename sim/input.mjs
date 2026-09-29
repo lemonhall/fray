@@ -28,27 +28,27 @@ export function applyMove(w, a, dirX, dirY, dt) {
   return { mx, my };
 }
 
-export function stepHuman(w, a, dt) {
-  const input = a.input;
+/**
+ * 走一格。`cmd` 是**本 tick 从命令队列里取出的那一格**（`sim/netcode.mjs` 的
+ * `takeCmd`）：它带的是这一格的方向与角度，而不是"最新的一条消息"。
+ * 队列空了就是站着不动——这也是掉线时角色停下的原因。
+ */
+export function stepHuman(w, a, dt, cmd) {
   if (!a.alive) return;
-  if (!input) { a.vx = 0; a.vy = 0; return; }
-  const dir = decodeMove(input.k | 0);
-  applyMove(w, a, dir.x, dir.y, dt);
-  a.angle = Number.isFinite(input.a) ? input.a : a.angle;
-  a.aimRange = Number.isFinite(input.r) ? input.r : 310;
+  if (!cmd) { a.vx = 0; a.vy = 0; return; }
+  applyMove(w, a, cmd.mx, cmd.my, dt);
+  if (Number.isFinite(cmd.a)) a.angle = cmd.a;
+  if (Number.isFinite(cmd.r)) a.aimRange = cmd.r;
   if (a.offers.length) return; // 正在选卡：不许开火，避免"边选边打"
-  if (input.f) fire(w, a, a.angle);
+  if (cmd.f) fire(w, a, a.angle);
 }
 
-/** 一次性动作（闪避 / 装置 / 大招 / 选卡）按帧消费，不会被每个 tick 重复触发。 */
-export function applyActions(w, a) {
-  const input = a.input;
-  if (!input || !a.alive) return;
-  const pending = input.act | 0;
+/** 一次性动作（闪避 / 装置 / 大招）只在这一格触发一次——动作位在队列里就被清掉了。 */
+export function applyActions(w, a, cmd) {
+  if (!a.alive || !cmd) return;
+  const pending = cmd.act | 0;
   if (!pending) return;
-  input.act = 0;
-  const dir = decodeMove(input.k | 0);
-  if (pending & 1) useDash(w, a, dir.x, dir.y);
+  if (pending & 1) useDash(w, a, cmd.mx, cmd.my);
   if (pending & 2) useGadget(w, a);
   if (pending & 4) useSuper(w, a);
 }

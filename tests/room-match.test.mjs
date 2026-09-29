@@ -9,6 +9,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createRoomState, addMember } from "../src/room-state.mjs";
 import { beginMatch, resetMatch, joinLive, dropPlayer, actorIdOf, advanceWorld } from "../src/room-match.mjs";
+import { MAX_CATCHUP_TICKS } from "../sim/constants.mjs";
+import { pushCmd } from "../sim/netcode.mjs";
 
 function staging(bots = 4, mode = "control") {
   const state = createRoomState({ tenant: "neon", roomId: "R1", name: "房", mode, bots, hostId: "g_1", hostName: "A" });
@@ -49,15 +51,28 @@ test("对局中有人进来：直接补一个实体，队伍往人少的一边�
   assert.equal(Math.abs(counts[0] - counts[1]), 1);
 });
 
-test("掉线只清掉最后一次输入，人不从场上消失", () => {
+test("掉线只清掉还没消化的输入命令，人不从场上消失", () => {
   const state = staging(2);
   const { world } = beginMatch(state);
-  world.actors[0].input = { k: 1, a: 0, f: 1, act: 0, r: 310 };
+  const actor = world.actors.find(a => a.ownerId === "g_1");
+  pushCmd(actor, { sq: 1, mx: 1, my: 0, a: 0, f: 0, act: 0, r: 310, n: 4 }, 1000);
+  assert.equal(actor.queued, 4, "命令入队");
   const id = actorIdOf(world, "g_1");
   dropPlayer(world, "g_1");
-  assert.equal(world.actors.find(a => a.id === id).input, null);
+  assert.equal(actor.queued, 0, "人走了，欠下的那几格就不该再走");
+  assert.equal(actor.cmds.length, 0);
   assert.ok(world.actors.some(a => a.ownerId === "g_1"), "实体还在原地挨打");
   assert.equal(actorIdOf(world, "不存在"), 0);
+});
+
+test("补算：跨境链路上常见的一秒级断流不该再丢时间", () => {
+  const state = staging(2);
+  const { world } = beginMatch(state);
+  const step = 1000 / 60;
+  // 1.5 秒没有任何消息到达（现实里就是一次 TCP 重传或者一次拥塞窗口）。
+  const base = advanceWorld(world, 1_000_000, 1_000_000 + step * 90 + .5, MAX_CATCHUP_TICKS);
+  assert.equal(world.tick, 90, "90 步全补上，一格不丢");
+  assert.equal(base, 1_000_000 + step * 90);
 });
 
 test("重开一局：回到候场，场上清空", () => {

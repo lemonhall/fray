@@ -128,8 +128,11 @@ async function main() {
   // 一路朝右推，直到服务端认账为止。用**截止时间**而不是固定轮数：
   // 隔着代理连线上时单次往返可能几百毫秒，固定轮数会变成一条爱抖的断言。
   const deadline = Date.now() + 10000;
+  let sq = 0;
   while (Date.now() < deadline) {
-    host.send({ t: "in", k: 2, a: 0, f: 0, r: 310 }); // k=2 → 朝右
+    // 新协议：一条命令自带序号与格数（25Hz 上行、60Hz 模拟 → 大约 2 格）。
+    // `k` 继续带着，是为了让线上还没更新的老服务端也能听懂。
+    host.send({ t: "in", sq: ++sq, mx: 1, my: 0, k: 2, a: 0, f: 0, r: 310, n: 2 });
     await sleep(40);
     const frame = await host.next(m => m.t === "s" && m.tk > latest.tk, 1500).catch(() => null);
     if (frame) latest = frame;
@@ -139,6 +142,8 @@ async function main() {
   const after = meIn(latest, playerId);
   check("服务端认可我的移动（权威坐标）", !!after && after.x - before.x > 40,
     `x ${before?.x} → ${after?.x}`);
+  check("快照带回权威确认点（ak/ax/ay）", Number.isFinite(after?.ak) && Number.isFinite(after?.ax) && after.ak > 0,
+    `ack=${after?.ak} @ (${after?.ax}, ${after?.ay})`);
   check("世界持续推进（tick 单调递增）", latest.tk > baseTick, `tick ${baseTick} → ${latest.tk}`);
 
   host.ws.close();

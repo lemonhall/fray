@@ -11,10 +11,13 @@
 import { addMember, removeMember, isHost, setBots, setConfig, setMemberGadget, view as roomView } from "./room-state.mjs";
 import { joinLive, dropPlayer } from "./room-match.mjs";
 import { ALARM_MS, MAX_MSGS_PER_SEC } from "./room-consts.mjs";
+import { resetQueue } from "../sim/netcode.mjs";
 
 /** 连上了：入名册、回一帧 hello；如果对局已经开着，直接把他投进场上补位。 */
 export function attach(room, ws, playerId, name) {
-  const conn = { playerId, name };
+  // 每个连接一份消息预算。原来的漏桶挂在房间上，等于 6 个人共享 70 条/秒——
+  // 6 个人各 25Hz 上行就是 150 条/秒，全员都在被自己的房间限流，输入成片地丢。
+  const conn = { playerId, name, budgetAt: 0, budgetN: 0 };
   room.conns.set(ws, conn);
   ws.addEventListener("message", ev => onMessage(room, ws, ev.data));
   ws.addEventListener("close", () => detach(room, ws));
@@ -32,6 +35,12 @@ export function attach(room, ws, playerId, name) {
     joinLive(room.world, joined.member);
     ws.send(JSON.stringify(room.mapMsg));
   }
+  // 重连回来用的是**同一个角色**，但输入时间线必须是新的：旧连接攒下的命令属于
+  // 上一个浏览器会话，留着会让角色在重连瞬间自己往前走一段。
+  const actor = room.world && room.world.phase === "live"
+    ? room.world.actors.find(a => a.ownerId === playerId)
+    : null;
+  if (actor) resetQueue(actor);
   broadcastRoom(room);
   void room.persist();
   void room.publish();
@@ -56,7 +65,7 @@ export function detach(room, ws) {
 export function onMessage(room, ws, data) {
   const conn = room.conns.get(ws);
   if (!conn) return;
-  if (!rateOk(room)) return;
+  if (!rateOk(conn)) return;
   let msg;
   try { msg = JSON.parse(String(data)); } catch { return; }
   if (!msg || typeof msg.t !== "string") return;
@@ -106,9 +115,8 @@ export function sendTo(ws, payload) {
 }
 
 /** 一秒内的漏桶：超预算的消息整条丢掉，避免单个客户端把房间的 CPU 吃干。 */
-export function rateOk(room) {
-  const now = Date.now();
-  if (now - room.msgBudget.at > 1000) room.msgBudget = { at: now, n: 0 };
-  room.msgBudget.n++;
-  return room.msgBudget.n <= MAX_MSGS_PER_SEC;
+export function rateOk(conn, now = Date.now()) {
+  if (now - conn.budgetAt > 1000) { conn.budgetAt = now; conn.budgetN = 0; }
+  conn.budgetN++;
+  return conn.budgetN <= MAX_MSGS_PER_SEC;
 }

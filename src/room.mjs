@@ -11,7 +11,9 @@
  */
 
 import { DurableObject } from "cloudflare:workers";
-import { MAX_CATCHUP_TICKS } from "../sim/constants.mjs";
+import { MAX_CATCHUP_TICKS, TICK_HZ } from "../sim/constants.mjs";
+import { MAX_CMD_TICKS, pushCmd } from "../sim/netcode.mjs";
+import { decodeMove } from "../sim/input.mjs";
 import { encodeSnapshot } from "../sim/wire.mjs";
 import { applyPerk } from "../sim/actor.mjs";
 import { verifyToken } from "./auth.mjs";
@@ -33,7 +35,6 @@ export class Room extends DurableObject {
     this.lastTickMs = 0;
     this.lastBroadcastMs = 0;
     this.reported = false;
-    this.msgBudget = { at: 0, n: 0 };
     ctx.blockConcurrencyWhile(async () => {
       this.state = (await ctx.storage.get("room")) || null;
     });
@@ -125,14 +126,25 @@ export class Room extends DurableObject {
     if (!this.world || this.world.phase !== "live") return;
     const actor = this.world.actors.find(a => a.ownerId === conn.playerId);
     if (!actor) return;
-    const prev = actor.input;
-    actor.input = {
-      k: (msg.k | 0) & 15,
-      a: Number.isFinite(msg.a) ? msg.a : (prev ? prev.a : 0),
+    const now = Date.now();
+    const dir = Number.isFinite(msg.mx) || Number.isFinite(msg.my)
+      ? { x: Number(msg.mx) || 0, y: Number(msg.my) || 0 }
+      : decodeMove(msg.k | 0);
+    // `n` 是新协议的核心：这条命令代表"几格"（1 格 = 1/60 秒）。
+    // 老客户端不带它，就按"距上一条命令的墙上时间"折算成格数——那正是改版前的语义，
+    // 所以线上前后端版本错开的那个窗口里，玩家不会莫名走不动或者飞起来。
+    const gapMs = actor.lastCmdAt ? now - actor.lastCmdAt : 1000 / TICK_HZ;
+    const declared = Number.isFinite(msg.n) ? Math.round(msg.n) : Math.round(gapMs / 1000 * TICK_HZ);
+    const n = Math.max(0, Math.min(MAX_CMD_TICKS, declared));
+    pushCmd(actor, {
+      sq: Math.max(Math.floor(Number(msg.sq) || 0), (actor.ack | 0) + 1),
+      mx: dir.x, my: dir.y,
+      a: Number.isFinite(msg.a) ? msg.a : actor.angle,
       f: msg.f ? 1 : 0,
-      act: ((msg.act | 0) & 7) | ((prev && prev.act) | 0),
+      act: (msg.act | 0) & 7,
       r: Number.isFinite(msg.r) ? Math.max(55, Math.min(380, msg.r)) : 310,
-    };
+      n,
+    }, now);
     // 不强制广播：50ms 的节流窗口负责节奏，否则 6 个人各自 25Hz 上行就是
     // 每秒 150 次全员广播，白白把 CPU 和带宽烧掉。
     this.tick(false);

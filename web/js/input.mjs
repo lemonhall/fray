@@ -129,16 +129,8 @@ export function aimRange(S, player) {
   return Math.max(55, Math.min(380, Math.hypot(wx - player.x, wy - player.y)));
 }
 
-/** 组装一帧上行输入。角度由客户端算——它只影响"朝哪打"，不影响"打没打中"。 */
-export function frameOf(S, player) {
-  const frame = {
-    t: "in",
-    k: moveBits(S),
-    a: Math.round(aimAngle(S, player) * 1000) / 1000,
-    f: S.mouse.down || S.touch.aim.active ? 1 : 0,
-    act: S.actions,
-    r: Math.round(aimRange(S, player)),
-  };
-  S.actions = 0;
-  return frame;
-}
+/*
+ * 上行报文的组装**不在这里**：一帧输入要经过"命令时间线"（方向变了就切命令、
+ * 每格计数、收尾发送），那套东西住在 `cmd.mjs`。这一层只回答四个问题：
+ * 往哪走、朝哪看、看多远、按着哪些键。
+ */

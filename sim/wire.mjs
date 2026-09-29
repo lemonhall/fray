@@ -91,6 +91,9 @@ function actorWire(a, mine) {
     out.co = a.collected; out.cp = Math.round(a.captureTime);
     out.lv = a.level; out.xp = Math.round(a.xp); out.nx = a.nextXP;
     out.pk = { ...a.perks }; out.of = [...a.offers];
+    // 权威确认点：客户端拿它 + 待确认命令重放，就能算出"我现在应该在哪"。
+    // 没有这三个字段，客户端只能退回"拿现在的坐标硬比"的老办法（见 predict.mjs）。
+    out.ak = a.ack | 0; out.ax = r1(a.ackX); out.ay = r1(a.ackY);
   }
   return out;
 }

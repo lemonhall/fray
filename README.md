@@ -103,7 +103,7 @@ curl.exe -X POST http://127.0.0.1:8790/v1/tenants -H "authorization: Bearer $env
 ## 测试
 
 ```powershell
-npm test                        # 41 个单元测试：内核、名册、权限、线格式、路由、DOM 契约、身份
+npm test                        # 50 个单元测试：内核、名册、权限、线格式、路由、DOM 契约、身份、手感
 npm run e2e                     # 双客户端联调（需要本机 Chrome + Playwright）
 npm run smoke                   # 纯服务端冒烟：HTTP + WebSocket 走完一局，不需要浏览器
 ```
@@ -120,6 +120,11 @@ npm run smoke                   # 纯服务端冒烟：HTTP + WebSocket 走完�
   否则会出现"用令牌 A 建房、用令牌 B 连 socket"，表现就是**房主忽然没有房主权限**。
   这条只有在跨境延迟（几百毫秒 + 抖动）下才会现形，本地跑一百遍都不一定复现，
   所以必须写成测试钉住。
+* **手感（延迟链路对拍）**：`tests/netcode-replay.test.mjs` 把"会抖、会堵"的链路
+  做成可编程的模型，让真实的客户端模块隔着它跟权威端跑几秒，然后量两件事——
+  本机画面有没有往后退、有没有偏离"从出生点重放全部命令"那条理想轨迹。同一段
+  输入还会跑一个**对照组**，把对账规则换回旧版；对照组每次都被拽回几十上百像素，
+  证明这条测试真的看得见那个 bug，而不是恰好断言在一个死数字上。
 
 `npm run e2e` 更有意思：它真的开两个 Chrome，一个开房一个加入，走完
 **开房 → 列表里看到 → 点进去 → 房主加机器人 → 开打 → 两边进场 → 移动 → 对射**，
@@ -129,7 +134,7 @@ npm run smoke                   # 纯服务端冒烟：HTTP + WebSocket 走完�
 > Playwright 需要装在仓库里（`npm i -D playwright`），或者全局装好后给它指路：
 > `$env:E2E_PLAYWRIGHT_DIR='E:\dev-state\npm-global\node_modules'; npm run e2e`
 
-`npm run smoke` 是部署后最省事的那道自检——15 条断言，几秒钟出结果。它打的是
+`npm run smoke` 是部署后最省事的那道自检——16 条断言，几秒钟出结果。它打的是
 **线上**还是本地，全看环境变量：
 
 ```powershell
@@ -193,7 +198,8 @@ src/        Worker 与 Durable Object：路由 / 认证 / 租户 / Lobby / Room 
 web/        静态站点：index.html + 原版皮肤 game.css + 联机层 net.css + js/ 各模块
 tools/      build（复制内核+注入地址）/ extract-original（一次性抽取原版皮肤）/ rebrand
             smoke（纯服务端冒烟，无浏览器）/ e2e-local（双 Chrome 联调）
-tests/      node:test —— 内核、名册、权限、线格式、路由、DOM 契约
+            latency-proxy（TCP 延迟注入）/ netcode-probe（手感探针，挂延迟代理跑）
+tests/      node:test —— 内核、名册、权限、线格式、路由、DOM 契约、身份、手感
 docs/       architecture.md（架构与时序）、protocol.md（线协议）、shots/（截图）
 ```
 
@@ -202,7 +208,7 @@ docs/       architecture.md（架构与时序）、protocol.md（线协议）、
 ## 现状
 
 **已上线**：后端 `fray-api.lemonhall.me`（免费计划，无 Worker Loader），
-前端 `fray.lemonhall.me`；线上冒烟 15/15、线上双客户端 E2E 10/10 通过。
+前端 `fray.lemonhall.me`；线上冒烟 16/16、线上双客户端 E2E 10/10 通过。
 
 已经能玩：
 
@@ -213,6 +219,9 @@ docs/       architecture.md（架构与时序）、protocol.md（线协议）、
 * 局内三选一强化（最多 6 级）、战术装置（手雷 / 相位盾 / 修复器）、大招、闪避；
 * 服务端结算、战绩落库、排行榜；
 * 中途加入（掉线的人角色留在场上，重连接着用同一个实体）。
+* **跨境链路上移动不"被拽回"**：本地预测 + 命令时间线对账，100ms 单向延迟 +
+  30ms 抖动 + 1.2 秒拥塞窗口实测，最大单帧回退从 288px 降到 0.1px（详见
+  `docs/architecture.md` 的"为什么移动不会被拽回去"）。
 
 已知取舍 / 下一步：
 

@@ -12,6 +12,7 @@ import { nextRnd, random } from "./rng.mjs";
 import { moveActor, findOpen } from "./map.mjs";
 import { fxRing, fxBurst, fxFloat, fxSfx, fxShake } from "./events.mjs";
 import { damageActor, damageBox, breakWall } from "./combat.mjs";
+import { resetQueue } from "./netcode.mjs";
 
 export const powerMult = a => (1 + a.cubes * .10) * (1 + .14 * perkOf(a, "power"));
 export const dashCooldown = a => 6 * Math.pow(.75, perkOf(a, "dash"));
@@ -20,7 +21,7 @@ export const gadgetCooldown = a => GADGETS[a.gadget].cooldown * Math.pow(.75, pe
 export function newActor(w, { id, kind, ownerId = "", type, x, y, team, name, gadget }) {
   const h = heroOf(type);
   const pick = GADGETS[gadget] ? gadget : ["grenade", "shield", "heal"][id % 3];
-  return {
+  const a = {
     id, kind, ownerId, type, name, team,
     x, y, spawnX: x, spawnY: y, r: 21,
     vx: 0, vy: 0, angle: -Math.PI / 2, walk: 0,
@@ -33,9 +34,10 @@ export function newActor(w, { id, kind, ownerId = "", type, x, y, team, name, ga
     gadgetCd: kind === "human" ? 0 : random(w, 5, 11), respawn: 0, collected: 0, captureTime: 0,
     overdrive: 0, lastBlast: -10, botLevel: 1,
     level: 1, xp: 0, nextXP: 70, pendingUpgrades: 0, offers: [],
-    lastInputSeq: 0,
     aimRange: 310,
   };
+  resetQueue(a);
+  return a;
 }
 
 export function respawnActor(w, a) {
@@ -43,6 +45,8 @@ export function respawnActor(w, a) {
   a.x = p.x; a.y = p.y; a.hp = a.maxHp; a.alive = true; a.ammo = 3; a.shield = 2.2;
   a.lastDamage = w.time; a.lastFire = w.time; a.fireCd = .2; a.path = []; a.pathTimer = 0;
   a.respawn = 0; a.dash = 0; a.superDash = false;
+  // 重生等于换了一条命：死之前攒下的那点输入不能带着走，否则复活瞬间会自己往前冲。
+  resetQueue(a);
   fxRing(w, a.x, a.y, 90, a.team === 0 ? "#78ffe6" : "#ff9ab7", .7);
 }
 

@@ -47,12 +47,29 @@ test("标记引用的样式表与脚本都真的存在", () => {
   }
 });
 
-test("共享内核的引用一律走 /sim/ 绝对路径，浏览器与服务端拿到的是同一份文件", () => {
-  const bad = [];
+/**
+ * 前端模块的 import 分两类，都必须落在 `web/` 里真的存在：
+ *
+ *   1. `/sim/x.mjs` —— 站点绝对路径，浏览器就是从这个地址取共享内核；
+ *   2. `./x.mjs` 和 `../sim/x.mjs` —— 相对路径。允许它们的原因只有一个：像
+ *      `web/js/predict.mjs` 这种"预测 + 对账"的核心逻辑要被 Node 测试直接 import
+ *      去跑（手感问题只有能被自动化量出来才算修好），而 Node 不认识站点绝对路径。
+ *      相对路径在浏览器里等价：`web/sim` 就是 `sim` 的构建副本，都在 web/ 根下。
+ *
+ * 所以这条测试守的是**可解析性**：每个本地引用都要能对应上 `web/` 里的一份文件，
+ * 缺了就说明前端会在运行时 404——不管它写的是哪一类路径。
+ */
+test("前端模块的每一个本地 import 都指向 web/ 里真实存在的文件", () => {
+  const missing = [];
   for (const { name, source } of modules) {
-    for (const [, spec] of source.matchAll(/from\s+"(\.\.\/[^"]+)"/gu)) {
-      bad.push(`${name} → ${spec}`);
+    const fromDir = path.join(ROOT, "web", "js", path.dirname(name));
+    for (const [, spec] of source.matchAll(/from\s+"(\/sim\/[^"]+|\.\.?\/[^"]+)"/gu)) {
+      const target = spec.startsWith("/sim/")
+        ? path.join(ROOT, "web", spec.slice(1))
+        : path.resolve(fromDir, spec);
+      assert.ok(target.startsWith(path.join(ROOT, "web")), `${name} → ${spec} 跑出 web/ 之外`);
+      try { readFileSync(target); } catch { missing.push(`${name} → ${spec}`); }
     }
   }
-  assert.deepEqual(bad, [], "前端模块只能从 /sim/ 或同目录引东西");
+  assert.deepEqual(missing, [], "前端模块引到了不存在的文件，运行时会 404");
 });

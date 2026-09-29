@@ -17,8 +17,16 @@ export const DT = 1 / TICK_HZ;
 /** 服务端每 3 个 tick（50ms / 20Hz）广播一次快照。 */
 export const SNAPSHOT_EVERY_TICKS = 3;
 
-/** 单个 tick 内最多补算多少步，防止客户端卡顿后把 DO 的 CPU 拖爆。 */
-export const MAX_CATCHUP_TICKS = 30;
+/**
+ * 单次补算最多多少步（60Hz 下的 4 秒），防止长时间挂起后把 DO 的 CPU 拖爆。
+ *
+ * 这个上限原来是 30（0.5 秒），太紧了：跨境链路上一次 500ms 的消息断流就会让
+ * 世界"丢掉"多出来的那段墙上时间，而客户端的本地预测走的是真实时间，两边于是
+ * 差出上百像素——表现就是"人往前走了一段，又被拽回去一小段"。
+ * 玩家自己的移动时间现在由输入命令队列兜着（`sim/netcode.mjs`），世界的时间
+ * 就不该再随便丢：240 步的补算对 DO 来说只是几毫秒的事。
+ */
+export const MAX_CATCHUP_TICKS = 240;
 
 export const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 export const lerp = (a, b, t) => a + (b - a) * t;

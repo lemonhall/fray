@@ -13,9 +13,10 @@
 import { DT, clamp } from "/sim/constants.mjs";
 import { heroOf } from "/sim/data.mjs";
 import { S } from "./state.mjs";
-import { attachInput, bindStick, clearInputs, frameOf, moveVector, aimAngle } from "./input.mjs";
+import { attachInput, bindStick, clearInputs, moveBits, moveVector, aimAngle, aimRange } from "./input.mjs";
 import { buildView } from "./view.mjs";
 import { stepPredict } from "./predict.mjs";
+import { initCmds, frameDir, noteTick, flushCmd } from "./cmd.mjs";
 import { renderGame } from "./render.mjs";
 import { stepFx } from "./fx.mjs";
 import { initAudio, toggleSound } from "./audio.mjs";
@@ -29,15 +30,16 @@ import { setScreen, togglePause } from "./screens.mjs";
 import { bindUpgrade, choosePerk } from "./upgrade.mjs";
 
 const $ = id => document.getElementById(id);
-const SEND_MS = 40;              // 25Hz 上行：比广播窗口（50ms）密一点，快照才不会跳格子
+/** 单帧最多补几格（60Hz 下的 400ms）：浏览器卡一下之后要把时间补回来，不能靠丢时间混过去。 */
+const MAX_TICKS_PER_FRAME = 24;
 const ctx = () => $("game").getContext("2d");
 
-const state = { last: 0, acc: 0, lastSent: 0, view: null };
+const state = { last: 0, acc: 0, view: null };
 
 // ---------------------------------------------------------------- 主循环
 
 function frame(now) {
-  const delta = Math.min((now - state.last) / 1000, .1) || 0;
+  const delta = Math.min((now - state.last) / 1000, .25) || 0;
   state.last = now;
   if (S.screen === "rooms" || S.screen === "staging") renderShowcase(now / 1000);
   if (S.screen === "play" || S.screen === "over") tickArena(delta, now);
@@ -51,33 +53,35 @@ function tickArena(delta, now) {
   const me = S.predictMe;
   if (me) {
     const dir = moveVector(S);
-    const angle = aimAngle(S, me);
+    let angle = aimAngle(S, me);
+    let fire = S.mouse.down || S.touch.aim.active ? 1 : 0;
+    // 辅助开火：只挑快照里出现过的敌人——也就是说，只有看得见才帮得忙。
+    if (S.assist) {
+      const target = assistTarget();
+      if (target) { angle = Math.atan2(target.y - me.y, target.x - me.x); fire = 1; }
+    }
+    const flags = { k: moveBits(S), f: fire, r: aimRange(S, me) };
+    // 一条命令 = "这一帧按着这个方向、已经走了几格"。方向变了 frameDir 会顺手把
+    // 上一条收尾发走，所以服务端收到的永远方向单一、格数明确——重放的精度全靠它。
+    const cmd = frameDir(now, dir.x, dir.y, angle, flags);
     state.acc += delta;
     let guard = 0;
-    while (state.acc >= DT && guard++ < 8) { stepPredict(S, DT, dir.x, dir.y, angle); state.acc -= DT; }
-    if (state.acc >= DT) state.acc = 0;
+    while (state.acc >= DT && guard++ < MAX_TICKS_PER_FRAME) {
+      // 死了就不预测位移：服务端那一侧也停着，预测了等于自己给自己造分歧。
+      if (me.alive) { stepPredict(S, DT, cmd.mx, cmd.my, cmd.a); noteTick(cmd); }
+      state.acc -= DT;
+    }
+    if (state.acc > DT * 2) state.acc = DT * 2;
     const ease = Math.min(1, delta * 9);
     S.cam.x += (me.x - S.cam.x) * ease;
     S.cam.y += (me.y - S.cam.y) * ease;
+    // 死了也要发：这条 n=0 的命令不推人，但推世界——不然房间里只剩 ping 的时候，
+    // 全灭之后世界会一格一格地慢下来。
+    if (S.screen === "play") flushCmd(now, flags);
   }
   stepFx(delta);
   renderGame(ctx(), view, S.ground);
   updateHud(view);
-  if (now - state.lastSent >= SEND_MS) sendInput(now);
-}
-
-/** 上行一帧输入。角度与开火都只是**意图**，命中与否由服务端说了算。 */
-function sendInput(now) {
-  if (!S.predictMe || S.screen !== "play") return;
-  const me = S.predictMe;
-  const frameOut = frameOf(S, me);
-  const target = S.assist ? assistTarget() : null;
-  if (target) {
-    frameOut.a = Math.round(Math.atan2(target.y - me.y, target.x - me.x) * 1000) / 1000;
-    frameOut.f = 1;
-  }
-  send(frameOut);
-  state.lastSent = now;
 }
 
 /** 辅助开火：只挑快照里出现过的敌人——也就是说，只有看得见才帮得忙。 */
@@ -168,6 +172,8 @@ async function boot() {
   bindKeys();
   bindAbilityButtons();
   bindUpgrade(send);
+  // 命令时间线的出口交给编排层：cmd.mjs 只管攒命令，不碰 socket。
+  initCmds(send);
   initLoadout({ onHero: i => send({ t: "hero", i }), onGadget: id => send({ t: "gadget", id }) });
   bindRoom({
     onBots: n => send({ t: "bots", n }),

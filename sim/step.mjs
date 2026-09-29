@@ -11,6 +11,7 @@ import { spawnBullet, respawnActor, slam } from "./actor.mjs";
 import { poisonTick, breakWall } from "./combat.mjs";
 import { updateAI } from "./ai.mjs";
 import { stepHuman, applyActions } from "./input.mjs";
+import { takeCmd, settleAck } from "./netcode.mjs";
 import { stepBullets } from "./bullets.mjs";
 import { stepGrenades, stepFields, stepSupplies, stepZone, stepStorm, stepCubes } from "./features.mjs";
 
@@ -77,7 +78,14 @@ export function stepActor(w, a, dt) {
       if (a.dash <= 0) slam(w, a);
     }
   }
-  if (a.kind === "human") { applyActions(w, a); stepHuman(w, a, dt); }
+  // 真人走"命令队列"：每 tick 消耗一格。队列空了就停住不动——这也是掉线/卡顿时
+  // 世界仍然按真实时间推进、而人不会自己乱走的原因。
+  if (a.kind === "human") {
+    const cmd = takeCmd(a);
+    if (cmd && cmd.act) applyActions(w, a, cmd);
+    stepHuman(w, a, dt, cmd);
+    settleAck(a);
+  }
   else updateAI(w, a, dt);
   poisonTick(w, a, dt);
 }
