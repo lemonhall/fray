@@ -16,15 +16,12 @@ import { encodeSnapshot } from "../sim/wire.mjs";
 import { applyPerk } from "../sim/actor.mjs";
 import { verifyToken } from "./auth.mjs";
 import {
-  createRoomState, addMember, removeMember, setBots, setConfig,
-  isHost, setMemberGadget, view as roomView, publicView, startCheck,
+  createRoomState, isHost, view as roomView, publicView, startCheck,
 } from "./room-state.mjs";
-import { beginMatch, resetMatch, joinLive, dropPlayer, actorIdOf, advanceWorld } from "./room-match.mjs";
+import { beginMatch, resetMatch, actorIdOf, advanceWorld } from "./room-match.mjs";
+import { attach, detach, onMessage, broadcastRoom, broadcast, sendTo } from "./room-conns.mjs";
+import { ALARM_MS, BROADCAST_MS } from "./room-consts.mjs";
 import { recordMatch } from "./results.mjs";
-
-const BROADCAST_MS = 50;
-const MAX_MSGS_PER_SEC = 70;
-const ALARM_MS = 5000;
 
 export class Room extends DurableObject {
   constructor(ctx, env) {
@@ -79,82 +76,14 @@ export class Room extends DurableObject {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  attach(ws, playerId, name) {
-    const conn = { playerId, name };
-    this.conns.set(ws, conn);
-    ws.addEventListener("message", ev => this.onMessage(ws, ev.data));
-    ws.addEventListener("close", () => this.detach(ws));
-    ws.addEventListener("error", () => this.detach(ws));
-
-    const joined = addMember(this.state, { playerId, name, hero: 0 });
-    if (!joined.ok) {
-      ws.send(JSON.stringify({ t: "error", error: joined.error }));
-      try { ws.close(1008, joined.error); } catch { /* 已关闭 */ }
-      this.conns.delete(ws);
-      return;
-    }
-    ws.send(JSON.stringify({ t: "hello", you: { id: playerId, name }, room: roomView(this.state, playerId) }));
-    if (this.world && this.world.phase === "live") {
-      joinLive(this.world, joined.member);
-      ws.send(JSON.stringify(this.mapMsg));
-    }
-    this.broadcastRoom();
-    void this.persist();
-    void this.publish();
-    void this.ctx.storage.setAlarm(Date.now() + ALARM_MS);
-  }
-
-  detach(ws) {
-    const conn = this.conns.get(ws);
-    if (!conn) return;
-    this.conns.delete(ws);
-    const samePlayerOnline = [...this.conns.values()].some(c => c.playerId === conn.playerId);
-    if (samePlayerOnline) return;
-    removeMember(this.state, conn.playerId);
-    dropPlayer(this.world, conn.playerId);
-    this.broadcastRoom();
-    void this.persist();
-    void this.publish();
-  }
-
-  onMessage(ws, data) {
-    const conn = this.conns.get(ws);
-    if (!conn) return;
-    if (!this.rateOk()) return;
-    let msg;
-    try { msg = JSON.parse(String(data)); } catch { return; }
-    if (!msg || typeof msg.t !== "string") return;
-
-    switch (msg.t) {
-      // 心跳也顺手推一格世界：25Hz 的输入是主驱动，但那条流一旦断了（切标签页、
-      // 输入还没开始上行），心跳就是"世界别停"的第二道保险。
-      case "ping": this.tick(false); return this.sendTo(ws, { t: "pong", id: msg.id, now: Date.now() });
-      case "hero": {
-        const m = this.state.members.find(x => x.playerId === conn.playerId);
-        if (m && Number.isFinite(msg.i)) m.hero = Math.max(0, Math.min(3, Math.floor(msg.i)));
-        return this.broadcastRoom();
-      }
-      case "gadget": {
-        setMemberGadget(this.state, conn.playerId, msg.id);
-        return this.broadcastRoom();
-      }
-      case "bots":
-        if (!isHost(this.state, conn.playerId)) return;
-        setBots(this.state, msg.n);
-        void this.persist(); void this.publish();
-        return this.broadcastRoom();
-      case "config":
-        if (!isHost(this.state, conn.playerId)) return;
-        setConfig(this.state, msg);
-        void this.persist(); void this.publish();
-        return this.broadcastRoom();
-      case "start": return this.start(ws, conn);
-      case "reset": return this.reset(ws, conn);
-      case "perk": return this.perk(conn, msg);
-      case "in": return this.input(conn, msg);
-      default: return;
-    }
-  }
+  // 下面这些是**转发方法**：真正的实现住在 `room-conns.mjs`，这个类只保留
+  // Durable Object 该有的形状。房间对外的接口没变，逻辑却按职责分了家。
+  attach(ws, playerId, name) { attach(this, ws, playerId, name); }
+  detach(ws) { detach(this, ws); }
+  onMessage(ws, data) { onMessage(this, ws, data); }
+  broadcastRoom() { broadcastRoom(this); }
+  broadcast(payload) { broadcast(this, payload); }
+  sendTo(ws, payload) { sendTo(ws, payload); }
 
   start(ws, conn) {
     if (!isHost(this.state, conn.playerId) || this.state.phase === "live") return;
@@ -239,26 +168,6 @@ export class Room extends DurableObject {
     void this.persist();
     void this.publish();
     void this.report();
-  }
-
-  broadcastRoom() {
-    for (const [ws, conn] of this.conns) this.sendTo(ws, roomView(this.state, conn.playerId));
-  }
-
-  broadcast(payload) {
-    const text = JSON.stringify(payload);
-    for (const [ws] of this.conns) if (ws.readyState === 1) ws.send(text);
-  }
-
-  sendTo(ws, payload) {
-    if (ws && ws.readyState === 1) ws.send(JSON.stringify(payload));
-  }
-
-  rateOk() {
-    const now = Date.now();
-    if (now - this.msgBudget.at > 1000) { this.msgBudget = { at: now, n: 0 }; }
-    this.msgBudget.n++;
-    return this.msgBudget.n <= MAX_MSGS_PER_SEC;
   }
 
   async persist() {

@@ -125,11 +125,16 @@ async function main() {
   const before = meIn(firstFrame, playerId);
   const baseTick = firstFrame.tk;
   let latest = firstFrame;
-  for (let i = 0; i < 24; i++) {
+  // 一路朝右推，直到服务端认账为止。用**截止时间**而不是固定轮数：
+  // 隔着代理连线上时单次往返可能几百毫秒，固定轮数会变成一条爱抖的断言。
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
     host.send({ t: "in", k: 2, a: 0, f: 0, r: 310 }); // k=2 → 朝右
-    await sleep(30);
-    const frame = await host.next(m => m.t === "s" && m.tk > latest.tk, 2000).catch(() => null);
+    await sleep(40);
+    const frame = await host.next(m => m.t === "s" && m.tk > latest.tk, 1500).catch(() => null);
     if (frame) latest = frame;
+    const moved = meIn(latest, playerId);
+    if (moved && moved.x - before.x > 40) break;
   }
   const after = meIn(latest, playerId);
   check("服务端认可我的移动（权威坐标）", !!after && after.x - before.x > 40,
